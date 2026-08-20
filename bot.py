@@ -1,14 +1,11 @@
 import os
-from dotenv import load_dotenv
 import logging
-import sqlite3
 import threading
-from flask import Flask
 import html
-
-load_dotenv()
-
-TOKEN = os.getenv("8586495198:AAEOx_q68HKUnIthJOcJHwTW_qNn4YlvM5I", "")
+from dotenv import load_dotenv
+from flask import Flask
+from sqlalchemy import create_engine, Column, Integer, String, ForeignKey, UniqueConstraint, text
+from sqlalchemy.orm import declarative_base, sessionmaker, scoped_session
 
 from telegram import (
     Update,
@@ -26,11 +23,9 @@ from telegram.ext import (
     filters,
 )
 
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+load_dotenv()
 
+# Web server sozlari
 app = Flask(__name__)
 
 @app.route('/')
@@ -43,80 +38,90 @@ def run_web_server():
 
 threading.Thread(target=run_web_server, daemon=True).start()
 
-ADMIN_ID = 8528296825
+# Environment O'zgaruvchilari
+TOKEN = os.getenv("BOT_TOKEN", "8586495198:AAEOx_q68HKUnIthJOcJHwTW_qNn4YlvM5I")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-REQUIRED_CHANNELS = [
-    "@Animelar_olami_uz_01",
-]
+if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+if not DATABASE_URL:
+    DATABASE_URL = "sqlite:///anime.db"
+
+engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_recycle=300)
+SessionFactory = sessionmaker(bind=engine)
+Session = scoped_session(SessionFactory)
+Base = declarative_base()
+
+# SQLAlchemy Modellari
+class Anime(Base):
+    __tablename__ = 'anime'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String, nullable=False)
+    description = Column(String)
+    genre = Column(String)
+
+class Episode(Base):
+    __tablename__ = 'episodes'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    anime_id = Column(Integer, ForeignKey('anime.id'), nullable=False)
+    episode_number = Column(Integer, nullable=False)
+    file_id = Column(String, nullable=False)
+
+class User(Base):
+    __tablename__ = 'users'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    telegram_id = Column(Integer, unique=True, nullable=False)
+    username = Column(String)
+    first_name = Column(String)
+    last_anime_id = Column(Integer)
+    last_episode_num = Column(Integer)
+
+class Favorite(Base):
+    __tablename__ = 'favorites'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, nullable=False)
+    anime_id = Column(Integer, nullable=False)
+    __table_args__ = (UniqueConstraint('user_id', 'anime_id', name='_user_anime_uc'),)
+
+def init_database():
+    Base.metadata.create_all(engine)
+
+def save_user(user_data):
+    session = Session()
+    try:
+        db_user = session.query(User).filter_by(telegram_id=user_data.id).first()
+        if not db_user:
+            db_user = User(
+                telegram_id=user_data.id,
+                username=user_data.username,
+                first_name=user_data.first_name
+            )
+            session.add(db_user)
+        else:
+            db_user.username = user_data.username
+            db_user.first_name = user_data.first_name
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Foydalanuvchini saqlashda xatolar: {e}")
+    finally:
+        Session.remove()
+
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+ADMIN_ID = 8528296825
+REQUIRED_CHANNELS = ["@Animelar_olami_uz_01"]
 
 PAGE_SIZE = 5
-EPISODES_PER_PAGE = 5  # Har bir sahifada atigi 5 ta qism ko'rinadi
+EPISODES_PER_PAGE = 5
 
 ADD_ANIME_NAME, ADD_ANIME_GENRE, ADD_ANIME_DESCRIPTION = range(3)
 ADD_EPISODE_NUMBER, ADD_EPISODE_VIDEO = range(3, 5)
 BROADCAST_MESSAGE = 5
-
-def db_connect():
-    return sqlite3.connect("anime.db")
-
-def init_database():
-    connection = db_connect()
-    cursor = connection.cursor()
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS anime (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            description TEXT,
-            genre TEXT
-        )
-    """)
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS episodes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            anime_id INTEGER NOT NULL,
-            episode_number INTEGER NOT NULL,
-            file_id TEXT NOT NULL,
-            FOREIGN KEY (anime_id) REFERENCES anime(id)
-        )
-    """)
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            telegram_id INTEGER UNIQUE NOT NULL,
-            username TEXT,
-            first_name TEXT,
-            last_anime_id INTEGER,
-            last_episode_num INTEGER
-        )
-    """)
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS favorites (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            anime_id INTEGER NOT NULL,
-            UNIQUE(user_id, anime_id)
-        )
-    """)
-
-    connection.commit()
-    connection.close()
-
-def save_user(user):
-    connection = db_connect()
-    cursor = connection.cursor()
-    cursor.execute("""
-        INSERT INTO users (telegram_id, username, first_name)
-        VALUES (?, ?, ?)
-        ON CONFLICT(telegram_id) DO UPDATE SET
-        username=excluded.username,
-        first_name=excluded.first_name
-    """, (user.id, user.username, user.first_name))
-    connection.commit()
-    connection.close()
 
 def is_admin(user_id: int) -> bool:
     return user_id == ADMIN_ID
@@ -124,7 +129,6 @@ def is_admin(user_id: int) -> bool:
 async def check_sub(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
     if is_admin(user_id):
         return True
-
     for channel in REQUIRED_CHANNELS:
         try:
             member = await context.bot.get_chat_member(chat_id=channel, user_id=user_id)
@@ -195,18 +199,15 @@ async def search_anime(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         query_text = update.message.text.strip()
-        connection = db_connect()
-        cursor = connection.cursor()
+        session = Session()
 
         if query_text.isdigit():
             anime_id = int(query_text)
-            cursor.execute("SELECT id, name FROM anime WHERE id = ?", (anime_id,))
-            results = cursor.fetchall()
+            results = session.query(Anime.id, Anime.name).filter(Anime.id == anime_id).all()
         else:
-            cursor.execute("SELECT id, name FROM anime WHERE name LIKE ? LIMIT 10", (f"%{query_text}%",))
-            results = cursor.fetchall()
+            results = session.query(Anime.id, Anime.name).filter(Anime.name.ilike(f"%{query_text}%")).limit(10).all()
 
-        connection.close()
+        Session.remove()
 
         if not results:
             await update.message.reply_text("😔 <b>Kechirasiz, siz qidirgan anime topilmadi!</b>\n\nNomni to'g'ri yozganingizni tekshirib ko'ring.", parse_mode="HTML")
@@ -254,11 +255,9 @@ async def delete_anime_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    connection = db_connect()
-    cursor = connection.cursor()
-    cursor.execute("SELECT id, name FROM anime ORDER BY id DESC")
-    anime_list = cursor.fetchall()
-    connection.close()
+    session = Session()
+    anime_list = session.query(Anime.id, Anime.name).order_by(Anime.id.desc()).all()
+    Session.remove()
 
     if not anime_list:
         keyboard = [[InlineKeyboardButton("⬅️ Orqaga ⚙️", callback_data="back_admin")]]
@@ -278,23 +277,21 @@ async def process_delete_anime(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.answer()
 
     anime_id = int(query.data.split("_")[-1])
+    session = Session()
 
-    connection = db_connect()
-    cursor = connection.cursor()
-    cursor.execute("SELECT name FROM anime WHERE id = ?", (anime_id,))
-    anime = cursor.fetchone()
+    anime = session.query(Anime).filter_by(id=anime_id).first()
 
     if anime:
-        anime_name = anime[0]
-        cursor.execute("DELETE FROM anime WHERE id = ?", (anime_id,))
-        cursor.execute("DELETE FROM episodes WHERE anime_id = ?", (anime_id,))
-        cursor.execute("DELETE FROM favorites WHERE anime_id = ?", (anime_id,))
-        connection.commit()
+        anime_name = anime.name
+        session.delete(anime)
+        session.query(Episode).filter_by(anime_id=anime_id).delete()
+        session.query(Favorite).filter_by(anime_id=anime_id).delete()
+        session.commit()
         text = f"✅ <b>{anime_name}</b> va uning barcha qismlari muvaffaqiyatli o‘chirildi! 🗑"
     else:
         text = "❌ Anime topilmadi."
 
-    connection.close()
+    Session.remove()
 
     keyboard = [[InlineKeyboardButton("⬅️ Admin panel ⚙️", callback_data="back_admin")]]
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
@@ -303,11 +300,9 @@ async def admin_anime_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    connection = db_connect()
-    cursor = connection.cursor()
-    cursor.execute("SELECT id, name FROM anime ORDER BY id DESC")
-    anime_list = cursor.fetchall()
-    connection.close()
+    session = Session()
+    anime_list = session.query(Anime.id, Anime.name).order_by(Anime.id.desc()).all()
+    Session.remove()
 
     if not anime_list:
         text = "📋 Hozircha botda animelar yo‘q."
@@ -323,17 +318,11 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    connection = db_connect()
-    cursor = connection.cursor()
-    cursor.execute("SELECT COUNT(*) FROM users")
-    users_count = cursor.fetchone()[0]
-    
-    cursor.execute("SELECT COUNT(*) FROM anime")
-    anime_count = cursor.fetchone()[0]
-    
-    cursor.execute("SELECT COUNT(*) FROM episodes")
-    episodes_count = cursor.fetchone()[0]
-    connection.close()
+    session = Session()
+    users_count = session.query(User).count()
+    anime_count = session.query(Anime).count()
+    episodes_count = session.query(Episode).count()
+    Session.remove()
 
     text = (
         "📊 <b>BOT STATISTIKASI:</b> 📈\n\n"
@@ -356,11 +345,9 @@ async def broadcast_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def broadcast_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message_text = update.message.text
 
-    connection = db_connect()
-    cursor = connection.cursor()
-    cursor.execute("SELECT telegram_id FROM users")
-    users = cursor.fetchall()
-    connection.close()
+    session = Session()
+    users = session.query(User.telegram_id).all()
+    Session.remove()
 
     count = 0
     for (user_id,) in users:
@@ -399,11 +386,11 @@ async def add_anime_description(update: Update, context: ContextTypes.DEFAULT_TY
     genre = context.user_data["anime_genre"]
     description = update.message.text.strip()
 
-    connection = db_connect()
-    cursor = connection.cursor()
-    cursor.execute("INSERT INTO anime (name, description, genre) VALUES (?, ?, ?)", (name, description, genre))
-    connection.commit()
-    connection.close()
+    session = Session()
+    new_anime = Anime(name=name, genre=genre, description=description)
+    session.add(new_anime)
+    session.commit()
+    Session.remove()
 
     context.user_data.clear()
     await update.message.reply_text(f"🎉 <b>ANIME MUVAFFAQIYATLI QO‘SHILDI!</b> 🎌\n\n📌 Nomi: <b>{html.escape(name)}</b>", parse_mode="HTML")
@@ -413,11 +400,9 @@ async def add_episode_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    connection = db_connect()
-    cursor = connection.cursor()
-    cursor.execute("SELECT id, name FROM anime ORDER BY id DESC")
-    anime_list = cursor.fetchall()
-    connection.close()
+    session = Session()
+    anime_list = session.query(Anime.id, Anime.name).order_by(Anime.id.desc()).all()
+    Session.remove()
 
     if not anime_list:
         keyboard = [[InlineKeyboardButton("⬅️ Admin panel ⚙️", callback_data="back_admin")]]
@@ -439,20 +424,17 @@ async def choose_episode_anime(update: Update, context: ContextTypes.DEFAULT_TYP
     anime_id = int(query.data.split("_")[-1])
     context.user_data["episode_anime_id"] = anime_id
 
-    connection = db_connect()
-    cursor = connection.cursor()
-    cursor.execute("SELECT name FROM anime WHERE id = ?", (anime_id,))
-    anime = cursor.fetchone()
-    
-    cursor.execute("SELECT MAX(episode_number) FROM episodes WHERE anime_id = ?", (anime_id,))
-    max_ep = cursor.fetchone()[0]
-    connection.close()
+    session = Session()
+    anime = session.query(Anime).filter_by(id=anime_id).first()
+    max_ep = session.query(Episode.episode_number).filter_by(anime_id=anime_id).order_by(Episode.episode_number.desc()).first()
+    Session.remove()
 
-    next_suggested = (max_ep or 0) + 1
-    context.user_data["episode_anime_name"] = anime[0]
+    max_ep_num = max_ep[0] if max_ep else 0
+    next_suggested = max_ep_num + 1
+    context.user_data["episode_anime_name"] = anime.name
     
     await query.edit_message_text(
-        f"🎬 <b>Tanlangan Anime:</b> {html.escape(anime[0])}\n\n"
+        f"🎬 <b>Tanlangan Anime:</b> {html.escape(anime.name)}\n\n"
         f"🔢 <b>Qism raqamini kiriting</b> (Masalan: {next_suggested}):", 
         parse_mode="HTML"
     )
@@ -485,11 +467,11 @@ async def episode_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Seans xatosi. /admin menyusidan qayta urinib ko'ring.")
         return ConversationHandler.END
 
-    connection = db_connect()
-    cursor = connection.cursor()
-    cursor.execute("INSERT INTO episodes (anime_id, episode_number, file_id) VALUES (?, ?, ?)", (anime_id, ep_num, video_file_id))
-    connection.commit()
-    connection.close()
+    session = Session()
+    new_ep = Episode(anime_id=anime_id, episode_number=ep_num, file_id=video_file_id)
+    session.add(new_ep)
+    session.commit()
+    Session.remove()
 
     keyboard = [
         [InlineKeyboardButton(f"➕ Keyingi ({ep_num + 1}-qism)ni qo'shish", callback_data=f"quick_add_next_{anime_id}_{ep_num + 1}")],
@@ -517,20 +499,18 @@ async def quick_add_next_start(update: Update, context: ContextTypes.DEFAULT_TYP
     context.user_data["episode_anime_id"] = anime_id
     context.user_data["episode_number"] = next_ep
 
-    connection = db_connect()
-    cursor = connection.cursor()
-    cursor.execute("SELECT name FROM anime WHERE id = ?", (anime_id,))
-    anime = cursor.fetchone()
-    connection.close()
+    session = Session()
+    anime = session.query(Anime).filter_by(id=anime_id).first()
+    Session.remove()
 
     if not anime:
         await query.edit_message_text("❌ Anime topilmadi.")
         return ConversationHandler.END
 
-    context.user_data["episode_anime_name"] = anime[0]
+    context.user_data["episode_anime_name"] = anime.name
 
     await query.edit_message_text(
-        f"🎬 <b>Anime:</b> {html.escape(anime[0])}\n\n"
+        f"🎬 <b>Anime:</b> {html.escape(anime.name)}\n\n"
         f"📹 <b>{next_ep}-qism uchun video yuboring:</b> 📲",
         parse_mode="HTML"
     )
@@ -541,11 +521,9 @@ async def user_anime_list_paged(update: Update, context: ContextTypes.DEFAULT_TY
     if query:
         await query.answer()
 
-    connection = db_connect()
-    cursor = connection.cursor()
-    cursor.execute("SELECT id, name FROM anime ORDER BY name")
-    anime_list = cursor.fetchall()
-    connection.close()
+    session = Session()
+    anime_list = session.query(Anime.id, Anime.name).order_by(Anime.name).all()
+    Session.remove()
 
     if not anime_list:
         if query:
@@ -576,7 +554,6 @@ async def user_anime_list_paged(update: Update, context: ContextTypes.DEFAULT_TY
 
     await query.edit_message_text(f"📚 <b>ANIME KATALOGI</b> (Sahifa {page + 1}): 🎌", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
-# HAR BIR SAHIFADA FAQAT 5 TA QISM CHIQARISH TIZIMI
 async def user_anime_details(update: Update, context: ContextTypes.DEFAULT_TYPE, ep_page: int = 0):
     query = update.callback_query
     await query.answer()
@@ -587,34 +564,25 @@ async def user_anime_details(update: Update, context: ContextTypes.DEFAULT_TYPE,
     if len(parts) > 3:
         ep_page = int(parts[3])
 
-    connection = db_connect()
-    cursor = connection.cursor()
-    cursor.execute("SELECT name, description, genre FROM anime WHERE id = ?", (anime_id,))
-    anime = cursor.fetchone()
-
-    cursor.execute("SELECT episode_number FROM episodes WHERE anime_id = ? ORDER BY episode_number", (anime_id,))
-    episodes = [row[0] for row in cursor.fetchall()]
-
-    cursor.execute("SELECT id FROM favorites WHERE user_id = ? AND anime_id = ?", (user_id, anime_id))
-    is_fav = cursor.fetchone()
-    connection.close()
+    session = Session()
+    anime = session.query(Anime).filter_by(id=anime_id).first()
+    episodes = [ep.episode_number for ep in session.query(Episode.episode_number).filter_by(anime_id=anime_id).order_by(Episode.episode_number).all()]
+    is_fav = session.query(Favorite).filter_by(user_id=user_id, anime_id=anime_id).first() is not None
+    Session.remove()
 
     if not anime:
         keyboard = [[InlineKeyboardButton("⬅️ Katalogga qaytish 📚", callback_data="user_anime_list_page_0")]]
         await query.edit_message_text("❌ Anime topilmadi.", reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
-    name, description, genre = anime
     text = (
-        f"🎌 <b>{html.escape(name)}</b> (ID: <code>{anime_id}</code>)\n\n"
-        f"🎭 <b>Janri:</b> {html.escape(genre or 'Noma’lum')}\n"
-        f"📝 <b>Tavsif:</b> <i>{html.escape(description or 'Tavsif berilmagan.')}</i>\n\n"
+        f"🎌 <b>{html.escape(anime.name)}</b> (ID: <code>{anime_id}</code>)\n\n"
+        f"🎭 <b>Janri:</b> {html.escape(anime.genre or 'Noma’lum')}\n"
+        f"📝 <b>Tavsif:</b> <i>{html.escape(anime.description or 'Tavsif berilmagan.')}</i>\n\n"
         f"🍿 <b>Tomosha qilish uchun qismni tanlang:</b> 👇"
     )
 
     keyboard = []
-    
-    # 5 tadan qism chiqarish
     total_episodes = len(episodes)
     start_idx = ep_page * EPISODES_PER_PAGE
     end_idx = start_idx + EPISODES_PER_PAGE
@@ -623,13 +591,12 @@ async def user_anime_details(update: Update, context: ContextTypes.DEFAULT_TYPE,
     row = []
     for ep_num in current_episodes:
         row.append(InlineKeyboardButton(f"🎬 {ep_num}-qism", callback_data=f"watch_{anime_id}_{ep_num}"))
-        if len(row) == 3: # Har qatorda 3 tadan ixcham joylashtirish
+        if len(row) == 3:
             keyboard.append(row)
             row = []
     if row:
         keyboard.append(row)
 
-    # 5 talik sahifalash tugmalari
     ep_nav = []
     if ep_page > 0:
         ep_nav.append(InlineKeyboardButton("⬅️ Oldingi 5 ta", callback_data=f"user_anime_{anime_id}_{ep_page - 1}"))
@@ -654,18 +621,20 @@ async def toggle_favorite(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
 
     anime_id = int(data.split("_")[-1])
-    connection = db_connect()
-    cursor = connection.cursor()
+    session = Session()
 
     if data.startswith("fav_add_"):
-        cursor.execute("INSERT OR IGNORE INTO favorites (user_id, anime_id) VALUES (?, ?)", (user_id, anime_id))
+        fav = session.query(Favorite).filter_by(user_id=user_id, anime_id=anime_id).first()
+        if not fav:
+            session.add(Favorite(user_id=user_id, anime_id=anime_id))
+            session.commit()
         await query.answer("⭐️ Saralanganlarga qo'shildi!", show_alert=True)
     else:
-        cursor.execute("DELETE FROM favorites WHERE user_id = ? AND anime_id = ?", (user_id, anime_id))
+        session.query(Favorite).filter_by(user_id=user_id, anime_id=anime_id).delete()
+        session.commit()
         await query.answer("❌ Saralanganlardan olib tashlandi!", show_alert=True)
 
-    connection.commit()
-    connection.close()
+    Session.remove()
     await user_anime_details(update, context)
 
 async def user_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -675,24 +644,17 @@ async def user_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = query.from_user
     save_user(user)
 
-    connection = db_connect()
-    cursor = connection.cursor()
-
-    cursor.execute("SELECT COUNT(*) FROM favorites WHERE user_id = ?", (user.id,))
-    fav_count = cursor.fetchone()[0]
-
-    cursor.execute("SELECT last_anime_id, last_episode_num FROM users WHERE telegram_id = ?", (user.id,))
-    last_watch_data = cursor.fetchone()
+    session = Session()
+    fav_count = session.query(Favorite).filter_by(user_id=user.id).count()
+    db_user = session.query(User).filter_by(telegram_id=user.id).first()
 
     last_watch_str = "Hali hech qanday anime ko'rilmagan 📺"
-    if last_watch_data and last_watch_data[0]:
-        anime_id, ep_num = last_watch_data[0], last_watch_data[1]
-        cursor.execute("SELECT name FROM anime WHERE id = ?", (anime_id,))
-        anime_res = cursor.fetchone()
-        if anime_res:
-            last_watch_str = f"🎬 <b>{html.escape(anime_res[0])}</b> ({ep_num}-qism)"
+    if db_user and db_user.last_anime_id:
+        anime = session.query(Anime).filter_by(id=db_user.last_anime_id).first()
+        if anime:
+            last_watch_str = f"🎬 <b>{html.escape(anime.name)}</b> ({db_user.last_episode_num}-qism)"
 
-    connection.close()
+    Session.remove()
 
     text = (
         f"👤 <b>SHAXSIY PROFILINGIZ</b> 🆔\n\n"
@@ -714,16 +676,10 @@ async def show_favorites(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     user_id = query.from_user.id
-    connection = db_connect()
-    cursor = connection.cursor()
-    cursor.execute("""
-        SELECT anime.id, anime.name 
-        FROM favorites 
-        JOIN anime ON anime.id = favorites.anime_id 
-        WHERE favorites.user_id = ?
-    """, (user_id,))
-    favs = cursor.fetchall()
-    connection.close()
+    session = Session()
+
+    favs = session.query(Anime.id, Anime.name).join(Favorite, Favorite.anime_id == Anime.id).filter(Favorite.user_id == user_id).all()
+    Session.remove()
 
     if not favs:
         keyboard = [[InlineKeyboardButton("⬅️ Profilga qaytish 👤", callback_data="user_profile")]]
@@ -745,31 +701,20 @@ async def watch_episode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     anime_id, ep_num = int(parts[1]), int(parts[2])
     user_id = query.from_user.id
 
-    connection = db_connect()
-    cursor = connection.cursor()
-    
-    cursor.execute("""
-        UPDATE users SET last_anime_id = ?, last_episode_num = ? WHERE telegram_id = ?
-    """, (anime_id, ep_num, user_id))
-    
-    cursor.execute("""
-        SELECT anime.name, episodes.file_id
-        FROM episodes JOIN anime ON anime.id = episodes.anime_id
-        WHERE episodes.anime_id = ? AND episodes.episode_number = ?
-    """, (anime_id, ep_num))
-    result = cursor.fetchone()
+    session = Session()
+    db_user = session.query(User).filter_by(telegram_id=user_id).first()
+    if db_user:
+        db_user.last_anime_id = anime_id
+        db_user.last_episode_num = ep_num
+        session.commit()
 
-    if result:
-        anime_name, file_id = result
+    ep_data = session.query(Anime.name, Episode.file_id).join(Episode, Episode.anime_id == Anime.id).filter(Episode.anime_id == anime_id, Episode.episode_number == ep_num).first()
 
-        cursor.execute("SELECT id FROM episodes WHERE anime_id = ? AND episode_number = ?", (anime_id, ep_num + 1))
-        has_next = cursor.fetchone() is not None
-
-        cursor.execute("SELECT id FROM episodes WHERE anime_id = ? AND episode_number = ?", (anime_id, ep_num - 1))
-        has_prev = cursor.fetchone() is not None
-
-        connection.commit()
-        connection.close()
+    if ep_data:
+        anime_name, file_id = ep_data
+        has_next = session.query(Episode).filter_by(anime_id=anime_id, episode_number=ep_num + 1).first() is not None
+        has_prev = session.query(Episode).filter_by(anime_id=anime_id, episode_number=ep_num - 1).first() is not None
+        Session.remove()
 
         nav_buttons = []
         if has_prev:
@@ -796,8 +741,7 @@ async def watch_episode(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML"
         )
     else:
-        connection.commit()
-        connection.close()
+        Session.remove()
         await query.message.reply_text("❌ Ushbu qism topilmadi!")
 
 async def handle_no_next_episode(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -895,7 +839,7 @@ def main():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, episode_number),
             ],
             ADD_EPISODE_VIDEO: [
-                MessageHandler(filters.ALL & ~filters.COMMAND, episode_video) # Video yuborishda bot qotmasligi uchun filtri kengaytirildi
+                MessageHandler(filters.ALL & ~filters.COMMAND, episode_video)
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
