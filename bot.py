@@ -3,6 +3,7 @@ import logging
 import os
 from pathlib import Path
 from threading import Thread
+
 from dotenv import load_dotenv
 from flask import Flask
 
@@ -21,28 +22,18 @@ from sqlalchemy import (
     create_engine,
     Column,
     Integer,
+    BigInteger,
     String,
     ForeignKey,
     UniqueConstraint,
 )
 from sqlalchemy.orm import declarative_base, sessionmaker, scoped_session
 
-# ... qolgan kodlaringiz
-env_path = Path(__file__).resolve().parent / ".env"
-load_dotenv(dotenv_path=env_path)
-
-TOKEN = os.getenv("BOT_TOKEN")
-if not TOKEN:
-    raise RuntimeError(
-        "BOT_TOKEN topilmadi! .env yoki hosting Environment Variables "
-        "ichiga BOT_TOKEN ni kiriting."
-    )
 
 # ============================================================
 # 1. ENVIRONMENT
 # ============================================================
 
-# .env faylining aniq manzilini ko'rsatib yuklaymiz
 env_path = Path(__file__).resolve().parent / ".env"
 load_dotenv(dotenv_path=env_path)
 
@@ -81,6 +72,7 @@ REQUIRED_CHANNELS = [
 PAGE_SIZE = 5
 EPISODES_PER_PAGE = 5
 
+
 # ============================================================
 # 2. LOGGING
 # ============================================================
@@ -91,6 +83,7 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
 
 # ============================================================
 # 3. FLASK WEB SERVER
@@ -111,7 +104,12 @@ def health():
 
 def run_web_server():
     port = int(os.environ.get("PORT", "8080"))
-    web_app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+    web_app.run(
+        host="0.0.0.0",
+        port=port,
+        debug=False,
+        use_reloader=False,
+    )
 
 
 # ============================================================
@@ -170,7 +168,7 @@ class User(Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    telegram_id = Column(Integer, unique=True, nullable=False)
+    telegram_id = Column(BigInteger, unique=True, nullable=False)
     username = Column(String, nullable=True)
     first_name = Column(String, nullable=True)
     last_anime_id = Column(Integer, nullable=True)
@@ -611,9 +609,10 @@ async def admin(
         return
 
     if not is_admin(update.effective_user.id):
-        await update.message.reply_text(
-            "🚫 Kechirasiz, siz admin emassiz!"
-        )
+        if update.message:
+            await update.message.reply_text(
+                "🚫 Kechirasiz, siz admin emassiz!"
+            )
         return
 
     await send_admin_panel(update)
@@ -910,6 +909,9 @@ async def broadcast_send(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
+    if not update.effective_user or not update.message:
+        return ConversationHandler.END
+
     if not is_admin(update.effective_user.id):
         return ConversationHandler.END
 
@@ -986,6 +988,9 @@ async def add_anime_name(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
+    if not update.message:
+        return ADD_ANIME_NAME
+
     name = update.message.text.strip()
 
     if not name:
@@ -1008,6 +1013,9 @@ async def add_anime_genre(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
+    if not update.message:
+        return ADD_ANIME_GENRE
+
     genre = update.message.text.strip()
 
     if not genre:
@@ -1030,6 +1038,9 @@ async def add_anime_description(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
+    if not update.message:
+        return ADD_ANIME_DESCRIPTION
+
     name = context.user_data.get("anime_name")
     genre = context.user_data.get("anime_genre")
     description = update.message.text.strip()
@@ -1225,6 +1236,9 @@ async def episode_number(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
+    if not update.message:
+        return ADD_EPISODE_NUMBER
+
     text = update.message.text.strip()
 
     if not text.isdigit() or int(text) <= 0:
@@ -1802,7 +1816,7 @@ async def toggle_favorite(
             session.commit()
 
             await query.answer(
-                "❌ Saralanganlerden olib tashlandi!",
+                "❌ Saralanganlardan olib tashlandi!",
                 show_alert=True,
             )
 
@@ -2003,7 +2017,9 @@ async def watch_episode(
 
     if len(parts) != 3:
         if query.message:
-            await query.message.reply_text("❌ Noto'g'ri qism ma'lumoti.")
+            await query.message.reply_text(
+                "❌ Noto'g'ri qism ma'lumoti."
+            )
         return
 
     try:
@@ -2011,7 +2027,9 @@ async def watch_episode(
         ep_num = int(parts[2])
     except ValueError:
         if query.message:
-            await query.message.reply_text("❌ Noto'g'ri qism ma'lumoti.")
+            await query.message.reply_text(
+                "❌ Noto'g'ri qism ma'lumoti."
+            )
         return
 
     user_id = query.from_user.id
@@ -2465,7 +2483,10 @@ def main():
         },
         fallbacks=[
             CommandHandler("cancel", cancel),
-            CallbackQueryHandler(cancel, pattern=r"^back_admin$"),
+            CallbackQueryHandler(
+                cancel,
+                pattern=r"^back_admin$",
+            ),
         ],
     )
 
@@ -2507,7 +2528,10 @@ def main():
         },
         fallbacks=[
             CommandHandler("cancel", cancel),
-            CallbackQueryHandler(cancel, pattern=r"^back_admin$"),
+            CallbackQueryHandler(
+                cancel,
+                pattern=r"^back_admin$",
+            ),
         ],
     )
 
@@ -2532,7 +2556,10 @@ def main():
         },
         fallbacks=[
             CommandHandler("cancel", cancel),
-            CallbackQueryHandler(cancel, pattern=r"^back_admin$"),
+            CallbackQueryHandler(
+                cancel,
+                pattern=r"^back_admin$",
+            ),
         ],
     )
 
