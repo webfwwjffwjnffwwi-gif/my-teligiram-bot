@@ -4,8 +4,12 @@ import logging
 import sqlite3
 import threading
 from flask import Flask
+import html
 
+# Env fayldan o'zgaruvchilarni yuklash
 load_dotenv()
+
+TOKEN = os.getenv("8586495198:AAEOx_q68HKUnIthJOcJHwTW_qNn4YlvM5I", "")
 
 from telegram import (
     Update,
@@ -46,14 +50,18 @@ threading.Thread(target=run_web_server, daemon=True).start()
 # SOZLAMALAR
 # =========================================================
 
-TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = 8528296825  # Telegram ID
-REQUIRED_CHANNEL = "@Animelar_olami_uz_01"  # Obona kanali
+
+# 📢 MAJBURiY OBUNA KANALLARI RO'YXATI (Xohlagancha kanal qo'shishingiz mumkin)
+REQUIRED_CHANNELS = [
+    "@Animelar_olami_uz_01",
+    # "@ikkinchi_kanal_username",  <-- Shuningdek boshqa kanallarni ham qo'shishingiz mumkin
+]
 
 PAGE_SIZE = 5
 
 # =========================================================
-# HOLATLAR
+# HOLATLAR (CONVERSATION STATES)
 # =========================================================
 
 ADD_ANIME_NAME, ADD_ANIME_GENRE, ADD_ANIME_DESCRIPTION = range(3)
@@ -114,7 +122,7 @@ def init_database():
     connection.close()
 
 # =========================================================
-# HELPERLAR
+# HELPERLAR VA MAJBURIY OBUNA MANTIG'I
 # =========================================================
 
 def save_user(user):
@@ -133,104 +141,131 @@ def save_user(user):
 def is_admin(user_id: int) -> bool:
     return user_id == ADMIN_ID
 
+# Barcha majburiy kanallarni tekshirish
 async def check_sub(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
     if is_admin(user_id):
         return True
-    try:
-        member = await context.bot.get_chat_member(chat_id=REQUIRED_CHANNEL, user_id=user_id)
-        return member.status in ["member", "administrator", "creator"]
-    except Exception as e:
-        logger.error(f"Obuna tekshirishda xatolik: {e}")
-        return False
 
-async def send_sub_request(update: Update):
-    channel_username = REQUIRED_CHANNEL.replace("@", "")
-    keyboard = [
-        [InlineKeyboardButton("📢 Rasmiy kanalimizga a'zo bo'ling 📢", url=f"https://t.me/{channel_username}")],
-        [InlineKeyboardButton("✅ Obunani tekshirish ✅", callback_data="check_subscription")]
-    ]
-    text = "⚠️ **Diqqat! Botdan foydalanish uchun avval rasmiy kanalimizga a'zo bo'ling:** 📢"
+    for channel in REQUIRED_CHANNELS:
+        try:
+            member = await context.bot.get_chat_member(chat_id=channel, user_id=user_id)
+            if member.status not in ["member", "administrator", "creator"]:
+                return False
+        except Exception as e:
+            logger.error(f"{channel} kanalini tekshirishda xatolik: {e}")
+            return False
+    return True
+
+# Obuna bo'lish tugmalarini chiqarish
+async def send_sub_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = []
+    
+    for channel in REQUIRED_CHANNELS:
+        channel_username = channel.replace("@", "")
+        keyboard.append([InlineKeyboardButton(f"📢 {channel} kanaliga a'zo bo'lish", url=f"https://t.me/{channel_username}")])
+    
+    keyboard.append([InlineKeyboardButton("✅ Obunani tekshirish ✅", callback_data="check_subscription")])
+
+    text = "🚨 <b>DIQQAT! Botdan foydalanish uchun quyidagi barcha kanallarga a'zo bo'ling:</b>"
     
     if update.callback_query:
         try:
-            await update.callback_query.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+            await update.callback_query.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
         except Exception:
-            await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+            await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
     else:
-        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
 # =========================================================
 # START & SEARCH
 # =========================================================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    save_user(user)
+    try:
+        user = update.effective_user
+        save_user(user)
 
-    if not await check_sub(user.id, context):
-        await send_sub_request(update)
-        return
+        if not await check_sub(user.id, context):
+            await send_sub_request(update, context)
+            return
 
-    keyboard = [
-        [InlineKeyboardButton("🎌 Anime katalogi 📚", callback_data="user_anime_list_page_0")],
-        [InlineKeyboardButton("👤 Shaxsiy profil 👤", callback_data="user_profile")]
-    ]
-    
-    text = (
-        f"👋 Salom, **{user.first_name}**! ✨\n\n"
-        f"🎌 **Anime botimizga xush kelibsiz!** 🎬\n\n"
-        f"🔍 *Siz quyidagi imkoniyatlardan foydalanishingiz mumkin:*\n"
-        f"🔹 Anime nomini yozib izlash 🔎\n"
-        f"🔹 Anime ID raqamini yuborib izlash 🆔\n"
-        f"🔹 Katalogdan tanlab tomosha qilish 🍿"
-    )
+        keyboard = [
+            [InlineKeyboardButton("🎌 Anime katalogi 📚", callback_data="user_anime_list_page_0")],
+            [InlineKeyboardButton("👤 Shaxsiy profil 👤", callback_data="user_profile")]
+        ]
+        
+        first_name_clean = html.escape(user.first_name or "Foydalanuvchi")
+        
+        text = (
+            f"✨ 🌟 <b>Salom, {first_name_clean}!</b> 🌟 ✨\n\n"
+            f"🎌 <b>O'zbekistondagi eng zo'r Anime botga xush kelibsiz!</b> 🎬🍿\n\n"
+            f"👇 <b>Quyidagi qulayliklardan foydalaning:</b>\n"
+            f"🔍 <i>Anime nomini yoki ID raqamini yozib izlang</i>\n"
+            f"📚 <i>Katalog orqali istalgan janrdagi animeni toping</i>\n"
+            f"⭐️ <i>Sevimli animelaringizni saqlab qo'ying</i>"
+        )
 
-    if update.callback_query:
-        await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
-    else:
-        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        if update.callback_query:
+            await update.callback_query.answer()
+            await update.callback_query.edit_message_text(
+                text, 
+                reply_markup=InlineKeyboardMarkup(keyboard), 
+                parse_mode="HTML"
+            )
+        else:
+            await update.message.reply_text(
+                text, 
+                reply_markup=InlineKeyboardMarkup(keyboard), 
+                parse_mode="HTML"
+            )
+
+    except Exception as e:
+        logger.error(f"START FUNKSIYASIDA XATOLIK: {e}")
 
 async def search_anime(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    save_user(user)
-    
-    if not await check_sub(user.id, context):
-        await send_sub_request(update)
-        return
+    try:
+        user = update.effective_user
+        save_user(user)
 
-    query_text = update.message.text.strip()
-    
-    connection = db_connect()
-    cursor = connection.cursor()
-    
-    if query_text.isdigit():
-        anime_id = int(query_text)
-        cursor.execute("SELECT id, name FROM anime WHERE id = ?", (anime_id,))
-        results = cursor.fetchall()
-    else:
-        cursor.execute("SELECT id, name FROM anime WHERE name LIKE ? LIMIT 10", (f"%{query_text}%",))
-        results = cursor.fetchall()
-        
-    connection.close()
+        if not await check_sub(user.id, context):
+            await send_sub_request(update, context)
+            return
 
-    if not results:
-        await update.message.reply_text("❌ Kechirasiz, siz qidirgan nomli yoki ID-li anime topilmadi! 😔")
-        return
+        query_text = update.message.text.strip()
+        connection = db_connect()
+        cursor = connection.cursor()
 
-    keyboard = [
-        [InlineKeyboardButton(f"🆔 {anime_id} | 🎌 {name}", callback_data=f"user_anime_{anime_id}")]
-        for anime_id, name in results
-    ]
-    keyboard.append([InlineKeyboardButton("⬅️ Bosh menyuga qaytish 🏠", callback_data="back_to_main")])
-    
-    await update.message.reply_text(
-        f"🔍 **Qidiruv bo'yicha topilgan animelar:** 🎬",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown"
-    )
+        if query_text.isdigit():
+            anime_id = int(query_text)
+            cursor.execute("SELECT id, name FROM anime WHERE id = ?", (anime_id,))
+            results = cursor.fetchall()
+        else:
+            cursor.execute("SELECT id, name FROM anime WHERE name LIKE ? LIMIT 10", (f"%{query_text}%",))
+            results = cursor.fetchall()
+
+        connection.close()
+
+        if not results:
+            await update.message.reply_text("😔 <b>Kechirasiz, siz qidirgan anime topilmadi!</b>\n\nNomni to'g'ri yozganingizni tekshirib ko'ring.", parse_mode="HTML")
+            return
+
+        keyboard = [
+            [InlineKeyboardButton(f"🆔 {anime_id} | 🎌 {html.escape(name)}", callback_data=f"user_anime_{anime_id}")]
+            for anime_id, name in results
+        ]
+        keyboard.append([InlineKeyboardButton("⬅️ Bosh menyuga qaytish 🏠", callback_data="back_to_main")])
+
+        await update.message.reply_text(
+            "🔎 <b>Qidiruv bo'yicha topilgan animelar:</b> 🎬",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="HTML"
+        )
+
+    except Exception as e:
+        logger.error(f"SEARCH_ANIME FUNKSIYASIDA XATOLIK: {e}")
 
 # =========================================================
-# ADMIN PANEL & ACTIONS
+# ADMIN PANEL
 # =========================================================
 
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -249,12 +284,12 @@ async def send_admin_panel(update: Update):
         [InlineKeyboardButton("📊 Bot statistikasi 📈", callback_data="statistics")],
         [InlineKeyboardButton("⬅️ Bosh menyuga qaytish 🏠", callback_data="back_to_main")]
     ]
-    text = "⚙️ **ADMINSTRATOR PANELI** 🛠\n\n👇 *Kerakli bo‘limni tanlang:*"
+    text = "⚙️ <b>ADMINISTRATOR PANELI</b> 🛠\n\n👇 <i>Kerakli bo'limni tanlang:</i>"
     
     if update.callback_query:
-        await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        await update.callback_query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
     else:
-        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
 async def delete_anime_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -268,7 +303,7 @@ async def delete_anime_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not anime_list:
         keyboard = [[InlineKeyboardButton("⬅️ Orqaga ⚙️", callback_data="back_admin")]]
-        await query.edit_message_text("❌ O‘chirish uchun xech qanday anime topilmadi.", reply_markup=InlineKeyboardMarkup(keyboard))
+        await query.edit_message_text("❌ O‘chirish uchun hech qanday anime topilmadi.", reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
     keyboard = [
@@ -277,7 +312,7 @@ async def delete_anime_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     keyboard.append([InlineKeyboardButton("⬅️ Orqaga ⚙️", callback_data="back_admin")])
 
-    await query.edit_message_text("🗑 **O‘chirmoqchi bo‘lgan animeni tanlang:** ⚠️\n\n*Diqqat:* Animeni o'chirsangiz, uning barcha qismlari ham bazadan o'chib ketadi!", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    await query.edit_message_text("🗑 <b>O‘chirmoqchi bo‘lgan animeni tanlang:</b> ⚠️\n\n<i>Diqqat: Anime o'chirilsa, uning barcha qismlari ham bazadan o'chib ketadi!</i>", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
 async def process_delete_anime(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -296,14 +331,14 @@ async def process_delete_anime(update: Update, context: ContextTypes.DEFAULT_TYP
         cursor.execute("DELETE FROM episodes WHERE anime_id = ?", (anime_id,))
         cursor.execute("DELETE FROM favorites WHERE anime_id = ?", (anime_id,))
         connection.commit()
-        text = f"✅ **{anime_name}** va uning barcha qismlari muvaffaqiyatli o‘chirildi! 🗑"
+        text = f"✅ <b>{anime_name}</b> va uning barcha qismlari muvaffaqiyatli o‘chirildi! 🗑"
     else:
         text = "❌ Anime topilmadi."
 
     connection.close()
 
     keyboard = [[InlineKeyboardButton("⬅️ Admin panel ⚙️", callback_data="back_admin")]]
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
 async def admin_anime_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -318,12 +353,12 @@ async def admin_anime_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not anime_list:
         text = "📋 Hozircha botda animelar yo‘q."
     else:
-        text = "📋 **BOTDAGI ANIMELAR RO'YXATI:** 🎌\n\n"
+        text = "📋 <b>BOTDAGI ANIMELAR RO'YXATI:</b> 🎌\n\n"
         for anime_id, name in anime_list:
-            text += f"🆔 ID: `{anime_id}` | 🎌 **{name}**\n"
+            text += f"🆔 ID: <code>{anime_id}</code> | 🎌 <b>{html.escape(name)}</b>\n"
 
     keyboard = [[InlineKeyboardButton("⬅️ Orqaga ⚙️", callback_data="back_admin")]]
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
 async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -342,13 +377,17 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     connection.close()
 
     text = (
-        "📊 **BOT STATISTIKASI:** 📈\n\n"
-        f"👤 Jami foydalanuvchilar: **{users_count}** ta 👥\n"
-        f"🎌 Animelar soni: **{anime_count}** ta 🎬\n"
-        f"📺 Jami qismlar: **{episodes_count}** ta 🍿"
+        "📊 <b>BOT STATISTIKASI:</b> 📈\n\n"
+        f"👥 Jami foydalanuvchilar: <b>{users_count}</b> ta\n"
+        f"🎬 Animelar soni: <b>{anime_count}</b> ta\n"
+        f"🍿 Jami epizodlar: <b>{episodes_count}</b> ta"
     )
     keyboard = [[InlineKeyboardButton("⬅️ Orqaga ⚙️", callback_data="back_admin")]]
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+
+# =========================================================
+# BROADCAST
+# =========================================================
 
 async def broadcast_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -356,7 +395,7 @@ async def broadcast_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(query.from_user.id):
         return ConversationHandler.END
 
-    await query.edit_message_text("📢 **XABAR TARQATISH BO'LIMI** 🚀\n\nBarcha foydalanuvchilarga yubormoqchi bo'lgan matningizni kiriting:", parse_mode="Markdown")
+    await query.edit_message_text("📢 <b>XABAR TARQATISH BO'LIMI</b> 🚀\n\nBarcha foydalanuvchilarga yubormoqchi bo'lgan matningizni kiriting:", parse_mode="HTML")
     return BROADCAST_MESSAGE
 
 async def broadcast_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -376,32 +415,32 @@ async def broadcast_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-    await update.message.reply_text(f"✅ Xabar muvaffaqiyatli **{count}** ta foydalanuvchiga yuborildi! 🚀", parse_mode="Markdown")
+    await update.message.reply_text(f"🚀 Xabar muvaffaqiyatli <b>{count}</b> ta foydalanuvchiga yuborildi! ✅", parse_mode="HTML")
     return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
-    await update.message.reply_text("❌ Amal bekor qilindi.\n\n /admin orqali panelni ochishingiz mumkin.")
+    await update.message.reply_text("❌ Amal bekor qilindi.\n\n/admin menyusi orqali panelni qayta ochishingiz mumkin.")
     return ConversationHandler.END
 
 # =========================================================
-# CONVERSATIONS (ANIME & EPISODE ADD)
+# ANIME & QISM QO'SHISH (CONVERSATIONS)
 # =========================================================
 
 async def add_anime_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text("➕ **ANIME QO‘SHISH** 🎌\n\nAnime nomini yozib yuboring:", parse_mode="Markdown")
+    await query.edit_message_text("➕ <b>YANGI ANIME QO‘SHISH</b> 🎌\n\nAnime nomini yozib yuboring:", parse_mode="HTML")
     return ADD_ANIME_NAME
 
 async def add_anime_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["anime_name"] = update.message.text.strip()
-    await update.message.reply_text("🎭 **Anime janrini kiriting:**\n*(Masalan: Jangari, Sarguzasht, Komediya)*")
+    await update.message.reply_text("🎭 <b>Anime janrini kiriting:</b>\n<i>(Masalan: Jangari, Sarguzasht, Fantastika)</i>", parse_mode="HTML")
     return ADD_ANIME_GENRE
 
 async def add_anime_genre(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["anime_genre"] = update.message.text.strip()
-    await update.message.reply_text("📝 **Anime haqida qisqacha ma'lumot (tavsif) yozing:**")
+    await update.message.reply_text("📝 <b>Anime haqida qisqacha tavsif (ma'lumot) kiriting:</b>", parse_mode="HTML")
     return ADD_ANIME_DESCRIPTION
 
 async def add_anime_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -416,9 +455,10 @@ async def add_anime_description(update: Update, context: ContextTypes.DEFAULT_TY
     connection.close()
 
     context.user_data.clear()
-    await update.message.reply_text(f"✅ **ANIME MUVAFFAQIYATLI QO‘SHILDI!** 🎌\n\n📌 Nomi: **{name}**", parse_mode="Markdown")
+    await update.message.reply_text(f"🎉 <b>ANIME MUVAFFAQIYATLI QO‘SHILDI!</b> 🎌\n\n📌 Nomi: <b>{html.escape(name)}</b>", parse_mode="HTML")
     return ConversationHandler.END
 
+# QISM QO'SHISH
 async def add_episode_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -430,14 +470,15 @@ async def add_episode_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     connection.close()
 
     if not anime_list:
-        await query.edit_message_text("❌ Avval anime qo‘shing!")
+        await query.edit_message_text("❌ Avval kamida bitta anime qo‘shishingiz kerak!")
         return ConversationHandler.END
 
     keyboard = [
         [InlineKeyboardButton(f"🆔 {anime_id} | 🎌 {name}", callback_data=f"episode_anime_{anime_id}")]
         for anime_id, name in anime_list
     ]
-    await query.edit_message_text("📺 **QISM QO‘SHISH** 🎬\n\nQaysi animega qism qo‘shmoqchisiz? Tanlang:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    keyboard.append([InlineKeyboardButton("⬅️ Bekor qilish ❌", callback_data="back_admin")])
+    await query.edit_message_text("📺 <b>QISM QO‘SHISH</b> 🎬\n\nQaysi animega qism qo‘shmoqchisiz? Tanlang:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
     return ADD_EPISODE_NUMBER
 
 async def choose_episode_anime(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -451,20 +492,29 @@ async def choose_episode_anime(update: Update, context: ContextTypes.DEFAULT_TYP
     cursor = connection.cursor()
     cursor.execute("SELECT name FROM anime WHERE id = ?", (anime_id,))
     anime = cursor.fetchone()
+    
+    cursor.execute("SELECT MAX(episode_number) FROM episodes WHERE anime_id = ?", (anime_id,))
+    max_ep = cursor.fetchone()[0]
     connection.close()
 
+    next_suggested = (max_ep or 0) + 1
     context.user_data["episode_anime_name"] = anime[0]
-    await query.edit_message_text(f"📺 **Tanlangan Anime:** {anime[0]}\n\nQism raqamini kiriting (Masalan: 1, 2, 3...):", parse_mode="Markdown")
+    
+    await query.edit_message_text(
+        f"🎬 <b>Tanlangan Anime:</b> {html.escape(anime[0])}\n\n"
+        f"🔢 <b>Qism raqamini kiriting</b> (Masalan: {next_suggested}):", 
+        parse_mode="HTML"
+    )
     return ADD_EPISODE_NUMBER
 
 async def episode_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     if not text.isdigit() or int(text) <= 0:
-        await update.message.reply_text("❌ Iltimos, faqat musbat raqam yuboring (Masalan: 1, 2, 3)!")
+        await update.message.reply_text("❌ Iltimos, faqat musbat raqam kiriting (Masalan: 1, 2, 3)!")
         return ADD_EPISODE_NUMBER
 
     context.user_data["episode_number"] = int(text)
-    await update.message.reply_text("🎬 **Qism videosini yuboring:** 📲")
+    await update.message.reply_text("📹 <b>Endi ushbu qismning videosini yuboring:</b> 📲")
     return ADD_EPISODE_VIDEO
 
 async def episode_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -475,6 +525,7 @@ async def episode_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     video_file_id = update.message.video.file_id
     anime_id = context.user_data["episode_anime_id"]
     ep_num = context.user_data["episode_number"]
+    anime_name = context.user_data.get("episode_anime_name", "Anime")
 
     connection = db_connect()
     cursor = connection.cursor()
@@ -482,9 +533,45 @@ async def episode_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     connection.commit()
     connection.close()
 
+    keyboard = [
+        [InlineKeyboardButton(f"➕ Keyingi ({ep_num + 1}-qism)ni qo'shish", callback_data=f"quick_add_next_{anime_id}_{ep_num + 1}")],
+        [InlineKeyboardButton("📋 Qismlar ro'yxatini ko'rish", callback_data=f"user_anime_{anime_id}")],
+        [InlineKeyboardButton("⚙️ Admin panelga qaytish", callback_data="back_admin")]
+    ]
+
+    await update.message.reply_text(
+        f"🎉 <b>{ep_num}-QISM MUVAFFAQIYATLI SAQLANDI!</b> 🎬\n\n"
+        f"🎌 Anime: <b>{html.escape(anime_name)}</b>\n"
+        f"📺 Epizod: <b>{ep_num}-qism</b>", 
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="HTML"
+    )
     context.user_data.clear()
-    await update.message.reply_text("✅ **QISM MUVAFFAQIYATLI SAQLANDI!** 🎬", parse_mode="Markdown")
     return ConversationHandler.END
+
+async def quick_add_next(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    parts = query.data.split("_")
+    anime_id, next_ep = int(parts[3]), int(parts[4])
+
+    context.user_data["episode_anime_id"] = anime_id
+    context.user_data["episode_number"] = next_ep
+
+    connection = db_connect()
+    cursor = connection.cursor()
+    cursor.execute("SELECT name FROM anime WHERE id = ?", (anime_id,))
+    anime = cursor.fetchone()
+    connection.close()
+
+    context.user_data["episode_anime_name"] = anime[0]
+
+    await query.edit_message_text(
+        f"🎬 <b>Anime:</b> {html.escape(anime[0])}\n"
+        f"🔢 <b>{next_ep}-qism uchun video yuboring:</b> 📲",
+        parse_mode="HTML"
+    )
 
 # =========================================================
 # KATALOG VA FOYDALANUVCHI BO'LIMLARI
@@ -513,7 +600,7 @@ async def user_anime_list_paged(update: Update, context: ContextTypes.DEFAULT_TY
     current_items = anime_list[start_offset:end_offset]
 
     keyboard = [
-        [InlineKeyboardButton(f"🆔 {anime_id} | 🎌 {name}", callback_data=f"user_anime_{anime_id}")]
+        [InlineKeyboardButton(f"🆔 {anime_id} | 🎌 {html.escape(name)}", callback_data=f"user_anime_{anime_id}")]
         for anime_id, name in current_items
     ]
 
@@ -528,7 +615,7 @@ async def user_anime_list_paged(update: Update, context: ContextTypes.DEFAULT_TY
 
     keyboard.append([InlineKeyboardButton("⬅️ Bosh menyuga qaytish 🏠", callback_data="back_to_main")])
 
-    await query.edit_message_text(f"🎌 **ANIME KATALOGI** (Sahifa {page + 1}): 📚", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    await query.edit_message_text(f"📚 <b>ANIME KATALOGI</b> (Sahifa {page + 1}): 🎌", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
 async def user_anime_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -556,17 +643,17 @@ async def user_anime_details(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     name, description, genre = anime
     text = (
-        f"🎌 **{name}** (ID: `{anime_id}`)\n\n"
-        f"🎭 Janr: **{genre or 'Noma’lum'}**\n"
-        f"📝 Tavsif: *{description or 'Tavsif yo‘q.'}*\n\n"
-        f"📺 **Tomosha qilish uchun qismni tanlang:** 👇"
+        f"🎌 <b>{html.escape(name)}</b> (ID: <code>{anime_id}</code>)\n\n"
+        f"🎭 <b>Janri:</b> {html.escape(genre or 'Noma’lum')}\n"
+        f"📝 <b>Tavsif:</b> <i>{html.escape(description or 'Tavsif berilmagan.')}</i>\n\n"
+        f"🍿 <b>Tomosha qilish uchun qismni tanlang:</b> 👇"
     )
 
     keyboard = []
     row = []
     for (ep_num,) in episodes:
         row.append(InlineKeyboardButton(f"🎬 {ep_num}-qism", callback_data=f"watch_{anime_id}_{ep_num}"))
-        if len(row) == 2:
+        if len(row) == 3:
             keyboard.append(row)
             row = []
     if row:
@@ -577,8 +664,9 @@ async def user_anime_details(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     keyboard.append([InlineKeyboardButton(fav_text, callback_data=fav_action)])
     keyboard.append([InlineKeyboardButton("⬅️ Katalogga qaytish 📚", callback_data="user_anime_list_page_0")])
+    keyboard.append([InlineKeyboardButton("🏠 Bosh sahifaga qaytish", callback_data="back_to_main")])
 
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
 async def toggle_favorite(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -601,7 +689,7 @@ async def toggle_favorite(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await user_anime_details(update, context)
 
 # =========================================================
-# PROFIL VA SARALANGANLAR
+# PROFIL VA TOMOSHA QILISH
 # =========================================================
 
 async def user_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -614,30 +702,28 @@ async def user_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     connection = db_connect()
     cursor = connection.cursor()
 
-    # Saralanganlar soni
     cursor.execute("SELECT COUNT(*) FROM favorites WHERE user_id = ?", (user.id,))
     fav_count = cursor.fetchone()[0]
 
-    # Oxirgi ko'rilgan anime
     cursor.execute("SELECT last_anime_id, last_episode_num FROM users WHERE telegram_id = ?", (user.id,))
     last_watch_data = cursor.fetchone()
 
-    last_watch_str = "Hali xech qanday anime ko'rilmagan 📺"
+    last_watch_str = "Hali hech qanday anime ko'rilmagan 📺"
     if last_watch_data and last_watch_data[0]:
         anime_id, ep_num = last_watch_data[0], last_watch_data[1]
         cursor.execute("SELECT name FROM anime WHERE id = ?", (anime_id,))
         anime_res = cursor.fetchone()
         if anime_res:
-            last_watch_str = f"🎬 **{anime_res[0]}** ({ep_num}-qism)"
+            last_watch_str = f"🎬 <b>{html.escape(anime_res[0])}</b> ({ep_num}-qism)"
 
     connection.close()
 
     text = (
-        f"👤 **SHAXSIY PROFILINGIZ** 🆔\n\n"
-        f"🆔 Telegram ID: `{user.id}`\n"
-        f"👤 Ismingiz: **{user.first_name}**\n"
-        f"⭐️ Saralangan animelar soni: **{fav_count}** ta\n"
-        f"📺 Oxirgi ko'rilgan qism: {last_watch_str}\n"
+        f"👤 <b>SHAXSIY PROFILINGIZ</b> 🆔\n\n"
+        f"🆔 <b>Telegram ID:</b> <code>{user.id}</code>\n"
+        f"👤 <b>Ismingiz:</b> {html.escape(user.first_name or '')}\n"
+        f"⭐️ <b>Saralangan animelar:</b> {fav_count} ta\n"
+        f"📺 <b>Oxirgi ko'rilgan qism:</b> {last_watch_str}\n"
     )
 
     keyboard = [
@@ -645,7 +731,7 @@ async def user_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("⬅️ Bosh menyuga qaytish 🏠", callback_data="back_to_main")]
     ]
 
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
 async def show_favorites(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -669,11 +755,11 @@ async def show_favorites(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     keyboard = [
-        [InlineKeyboardButton(f"🆔 {anime_id} | 🎌 {name}", callback_data=f"user_anime_{anime_id}")]
+        [InlineKeyboardButton(f"🆔 {anime_id} | 🎌 {html.escape(name)}", callback_data=f"user_anime_{anime_id}")]
         for anime_id, name in favs
     ]
     keyboard.append([InlineKeyboardButton("⬅️ Profilga qaytish 👤", callback_data="user_profile")])
-    await query.edit_message_text("⭐️ **SARALANGAN ANIMELARINGIZ:** 🌟", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    await query.edit_message_text("⭐️ <b>SARALANGAN ANIMELARINGIZ:</b> 🌟", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
 async def watch_episode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -686,7 +772,6 @@ async def watch_episode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     connection = db_connect()
     cursor = connection.cursor()
     
-    # Oxirgi ko'rilgan qismni profil uchun yangilash
     cursor.execute("""
         UPDATE users SET last_anime_id = ?, last_episode_num = ? WHERE telegram_id = ?
     """, (anime_id, ep_num, user_id))
@@ -701,7 +786,6 @@ async def watch_episode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if result:
         anime_name, file_id = result
 
-        # Keyingi va oldingi qismlar mavjudligini tekshirish
         cursor.execute("SELECT id FROM episodes WHERE anime_id = ? AND episode_number = ?", (anime_id, ep_num + 1))
         has_next = cursor.fetchone() is not None
 
@@ -711,7 +795,6 @@ async def watch_episode(update: Update, context: ContextTypes.DEFAULT_TYPE):
         connection.commit()
         connection.close()
 
-        # Tugmalarni shakllantirish
         nav_buttons = []
         if has_prev:
             nav_buttons.append(InlineKeyboardButton("⬅️ Oldingi qism", callback_data=f"watch_{anime_id}_{ep_num - 1}"))
@@ -721,17 +804,20 @@ async def watch_episode(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             nav_buttons.append(InlineKeyboardButton("Keyingi qism ➡️", callback_data=f"no_next_{ep_num + 1}"))
 
-        keyboard = [
-            nav_buttons,
-            [InlineKeyboardButton("⚠️ Videoda muammo bormi?", callback_data=f"report_{anime_id}_{ep_num}")],
-            [InlineKeyboardButton("📋 Qismlar ro'yxati", callback_data=f"user_anime_{anime_id}")]
-        ]
+        keyboard = []
+        if nav_buttons:
+            keyboard.append(nav_buttons)
 
-        await query.message.reply_video(
+        keyboard.append([InlineKeyboardButton("⚠️ Videoda muammo bormi?", callback_data=f"report_{anime_id}_{ep_num}")])
+        keyboard.append([InlineKeyboardButton("📋 Qismlar ro'yxati", callback_data=f"user_anime_{anime_id}")])
+        keyboard.append([InlineKeyboardButton("🏠 Bosh sahifaga qaytish", callback_data="back_to_main")])
+
+        await context.bot.send_video(
+            chat_id=query.message.chat_id,
             video=file_id, 
-            caption=f"🎌 **{anime_name}**\n📺 **{ep_num}-qism** 🍿",
+            caption=f"🎌 <b>{html.escape(anime_name)}</b>\n📺 <b>{ep_num}-qism</b> 🍿",
             reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="Markdown"
+            parse_mode="HTML"
         )
     else:
         connection.commit()
@@ -742,7 +828,7 @@ async def handle_no_next_episode(update: Update, context: ContextTypes.DEFAULT_T
     query = update.callback_query
     next_ep = query.data.split("_")[2]
     await query.answer(
-        text=f"📌 {next_ep}-qism hali chiqarilmagan, iltimos yangi qism joylanishini kuting! ⏳",
+        text=f"📌 {next_ep}-qism hali chiqarilmagan. Tez orada yuklanadi! ⏳",
         show_alert=True
     )
 
@@ -755,15 +841,15 @@ async def report_issue(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = query.from_user
 
     report_text = (
-        f"⚠️ **XATOLIK XABARI!** 🚨\n\n"
-        f"👤 Foydalanuvchi: @{user.username or 'yoq'} (ID: `{user.id}`)\n"
-        f"🎌 Anime ID: `{anime_id}`\n"
-        f"📺 Qism: **{ep_num}-qism**"
+        f"🚨 <b>XATOLIK XABARI!</b> ⚠️\n\n"
+        f"👤 Foydalanuvchi: @{user.username or 'yoq'} (ID: <code>{user.id}</code>)\n"
+        f"🎌 Anime ID: <code>{anime_id}</code>\n"
+        f"📺 Qism: <b>{ep_num}-qism</b>"
     )
-    await context.bot.send_message(chat_id=ADMIN_ID, text=report_text, parse_mode="Markdown")
+    await context.bot.send_message(chat_id=ADMIN_ID, text=report_text, parse_mode="HTML")
 
 # =========================================================
-# ROUTER & MAIN
+# ROUTER VA CALLBACK HANDLERS
 # =========================================================
 
 async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -773,14 +859,13 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "check_subscription":
         await query.answer()
         if await check_sub(query.from_user.id, context):
-            await query.edit_message_text("✅ Obuna tasdiqlandi! Botdan to'liq foydalanishingiz mumkin.\n\n /start tugmasini bosing.")
+            await query.edit_message_text("✅ Obuna tasdiqlandi! Botdan to'liq foydalanishingiz mumkin.\n\n/start tugmasini bosing.")
         else:
-            await query.answer("❌ Kanalga hali a'zo bo'lmadingiz!", show_alert=True)
+            await query.answer("❌ Siz hali barcha kanallarga a'zo bo'lmadingiz!", show_alert=True)
         return
 
-    # Majburiy obuna tekshiruvi
     if not await check_sub(query.from_user.id, context):
-        await send_sub_request(update)
+        await send_sub_request(update, context)
         return
 
     if data == "back_to_main":
@@ -812,12 +897,13 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await admin_stats(update, context)
     elif data == "back_admin":
         await send_admin_panel(update)
+    elif data.startswith("quick_add_next_"):
+        await quick_add_next(update, context)
 
 def main():
     init_database()
     app = Application.builder().token(TOKEN).build()
 
-    # Conversation Handlers
     add_anime_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(add_anime_start, pattern="^add_anime$")],
         states={
