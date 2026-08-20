@@ -9,7 +9,7 @@ import html
 # Env fayldan o'zgaruvchilarni yuklash
 load_dotenv()
 
-TOKEN = os.getenv("8586495198:AAEOx_q68HKUnIthJOcJHwTW_qNn4YlvM5I", "")
+TOKEN = os.getenv("8586495198:AAEOx_q68HKUnIthJOcJHwTW_qNn4YlvM5I")
 
 from telegram import (
     Update,
@@ -52,10 +52,9 @@ threading.Thread(target=run_web_server, daemon=True).start()
 
 ADMIN_ID = 8528296825  # Telegram ID
 
-# 📢 MAJBURiY OBUNA KANALLARI RO'YXATI (Xohlagancha kanal qo'shishingiz mumkin)
+# 📢 MAJBURIY OBUNA KANALLARI RO'YXATI
 REQUIRED_CHANNELS = [
     "@Animelar_olami_uz_01",
-    # "@ikkinchi_kanal_username",  <-- Shuningdek boshqa kanallarni ham qo'shishingiz mumkin
 ]
 
 PAGE_SIZE = 5
@@ -141,7 +140,6 @@ def save_user(user):
 def is_admin(user_id: int) -> bool:
     return user_id == ADMIN_ID
 
-# Barcha majburiy kanallarni tekshirish
 async def check_sub(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
     if is_admin(user_id):
         return True
@@ -156,7 +154,6 @@ async def check_sub(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
             return False
     return True
 
-# Obuna bo'lish tugmalarini chiqarish
 async def send_sub_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = []
     
@@ -470,7 +467,8 @@ async def add_episode_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     connection.close()
 
     if not anime_list:
-        await query.edit_message_text("❌ Avval kamida bitta anime qo‘shishingiz kerak!")
+        keyboard = [[InlineKeyboardButton("⬅️ Admin panel ⚙️", callback_data="back_admin")]]
+        await query.edit_message_text("❌ Qism qo'shish uchun avval kamida bitta anime yaratishingiz kerak!", reply_markup=InlineKeyboardMarkup(keyboard))
         return ConversationHandler.END
 
     keyboard = [
@@ -523,9 +521,13 @@ async def episode_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ADD_EPISODE_VIDEO
 
     video_file_id = update.message.video.file_id
-    anime_id = context.user_data["episode_anime_id"]
-    ep_num = context.user_data["episode_number"]
+    anime_id = context.user_data.get("episode_anime_id")
+    ep_num = context.user_data.get("episode_number")
     anime_name = context.user_data.get("episode_anime_name", "Anime")
+
+    if not anime_id or not ep_num:
+        await update.message.reply_text("❌ Ma'lumotlarda xatolik bo'ldi. Qat'iydan qayta urinib ko'ring.")
+        return ConversationHandler.END
 
     connection = db_connect()
     cursor = connection.cursor()
@@ -549,7 +551,7 @@ async def episode_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     return ConversationHandler.END
 
-async def quick_add_next(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def quick_add_next_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
@@ -565,13 +567,18 @@ async def quick_add_next(update: Update, context: ContextTypes.DEFAULT_TYPE):
     anime = cursor.fetchone()
     connection.close()
 
+    if not anime:
+        await query.edit_message_text("❌ Anime topilmadi.")
+        return ConversationHandler.END
+
     context.user_data["episode_anime_name"] = anime[0]
 
     await query.edit_message_text(
-        f"🎬 <b>Anime:</b> {html.escape(anime[0])}\n"
-        f"🔢 <b>{next_ep}-qism uchun video yuboring:</b> 📲",
+        f"🎬 <b>Anime:</b> {html.escape(anime[0])}\n\n"
+        f"📹 <b>{next_ep}-qism uchun video yuboring:</b> 📲",
         parse_mode="HTML"
     )
+    return ADD_EPISODE_VIDEO
 
 # =========================================================
 # KATALOG VA FOYDALANUVCHI BO'LIMLARI
@@ -897,8 +904,6 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await admin_stats(update, context)
     elif data == "back_admin":
         await send_admin_panel(update)
-    elif data.startswith("quick_add_next_"):
-        await quick_add_next(update, context)
 
 def main():
     init_database()
@@ -915,7 +920,10 @@ def main():
     )
 
     add_episode_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(add_episode_start, pattern="^add_episode$")],
+        entry_points=[
+            CallbackQueryHandler(add_episode_start, pattern="^add_episode$"),
+            CallbackQueryHandler(quick_add_next_start, pattern=r"^quick_add_next_\d+_\d+$"),
+        ],
         states={
             ADD_EPISODE_NUMBER: [
                 CallbackQueryHandler(choose_episode_anime, pattern=r"^episode_anime_\d+$"),
