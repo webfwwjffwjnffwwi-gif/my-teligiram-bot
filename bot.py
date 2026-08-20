@@ -8,7 +8,7 @@ import html
 
 load_dotenv()
 
-TOKEN = os.getenv("8586495198:AAEOx_q68HKUnIthJOcJHwTW_qNn4YlvM5I")
+TOKEN = os.getenv("8586495198:AAEOx_q68HKUnIthJOcJHwTW_qNn4YlvM5I", "")
 
 from telegram import (
     Update,
@@ -50,7 +50,7 @@ REQUIRED_CHANNELS = [
 ]
 
 PAGE_SIZE = 5
-EPISODES_PER_PAGE = 10  # Har bir sahifada nechta qism ko'rinishi
+EPISODES_PER_PAGE = 5  # Har bir sahifada atigi 5 ta qism ko'rinadi
 
 ADD_ANIME_NAME, ADD_ANIME_GENRE, ADD_ANIME_DESCRIPTION = range(3)
 ADD_EPISODE_NUMBER, ADD_EPISODE_VIDEO = range(3, 5)
@@ -469,7 +469,9 @@ async def episode_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ADD_EPISODE_VIDEO
 
 async def episode_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    video = update.message.video or update.message.document
+    msg = update.message
+    video = msg.video or msg.document or msg.animation or msg.video_note
+
     if not video:
         await update.message.reply_text("❌ Iltimos, video fayl yuboring!")
         return ADD_EPISODE_VIDEO
@@ -574,7 +576,7 @@ async def user_anime_list_paged(update: Update, context: ContextTypes.DEFAULT_TY
 
     await query.edit_message_text(f"📚 <b>ANIME KATALOGI</b> (Sahifa {page + 1}): 🎌", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
-# QISMLARNI SAHIFALASH VA QOTMASDAN CHIKARISH (OPTIMIZATSIYA)
+# HAR BIR SAHIFADA FAQAT 5 TA QISM CHIQARISH TIZIMI
 async def user_anime_details(update: Update, context: ContextTypes.DEFAULT_TYPE, ep_page: int = 0):
     query = update.callback_query
     await query.answer()
@@ -612,7 +614,7 @@ async def user_anime_details(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
     keyboard = []
     
-    # Qismlarni tartiblash va 5 tadan ixcham joylashtirish
+    # 5 tadan qism chiqarish
     total_episodes = len(episodes)
     start_idx = ep_page * EPISODES_PER_PAGE
     end_idx = start_idx + EPISODES_PER_PAGE
@@ -620,19 +622,19 @@ async def user_anime_details(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
     row = []
     for ep_num in current_episodes:
-        row.append(InlineKeyboardButton(f"🎬 {ep_num}", callback_data=f"watch_{anime_id}_{ep_num}"))
-        if len(row) == 5:  # Bitta qatorda ko'pida 5 ta tugma
+        row.append(InlineKeyboardButton(f"🎬 {ep_num}-qism", callback_data=f"watch_{anime_id}_{ep_num}"))
+        if len(row) == 3: # Har qatorda 3 tadan ixcham joylashtirish
             keyboard.append(row)
             row = []
     if row:
         keyboard.append(row)
 
-    # Qismlar sahifalash tugmalari
+    # 5 talik sahifalash tugmalari
     ep_nav = []
     if ep_page > 0:
-        ep_nav.append(InlineKeyboardButton("⬅️ Oldingi 10 ta", callback_data=f"user_anime_{anime_id}_{ep_page - 1}"))
+        ep_nav.append(InlineKeyboardButton("⬅️ Oldingi 5 ta", callback_data=f"user_anime_{anime_id}_{ep_page - 1}"))
     if end_idx < total_episodes:
-        ep_nav.append(InlineKeyboardButton("Keyingi 10 ta ➡️", callback_data=f"user_anime_{anime_id}_{ep_page + 1}"))
+        ep_nav.append(InlineKeyboardButton("Keyingi 5 ta ➡️", callback_data=f"user_anime_{anime_id}_{ep_page + 1}"))
     
     if ep_nav:
         keyboard.append(ep_nav)
@@ -893,7 +895,7 @@ def main():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, episode_number),
             ],
             ADD_EPISODE_VIDEO: [
-                MessageHandler(filters.VIDEO | filters.Document.ALL, episode_video)
+                MessageHandler(filters.ALL & ~filters.COMMAND, episode_video) # Video yuborishda bot qotmasligi uchun filtri kengaytirildi
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
