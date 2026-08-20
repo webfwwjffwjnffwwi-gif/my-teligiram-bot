@@ -1,10 +1,20 @@
+import os
 import html
 import logging
-import os
-from pathlib import Path
 from threading import Thread
+
 from dotenv import load_dotenv
 from flask import Flask
+
+from sqlalchemy import (
+    create_engine,
+    Column,
+    Integer,
+    String,
+    ForeignKey,
+    UniqueConstraint,
+)
+from sqlalchemy.orm import declarative_base, sessionmaker, scoped_session
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -17,36 +27,13 @@ from telegram.ext import (
     filters,
 )
 
-from sqlalchemy import (
-    create_engine,
-    Column,
-    Integer,
-    String,
-    ForeignKey,
-    UniqueConstraint,
-)
-from sqlalchemy.orm import declarative_base, sessionmaker, scoped_session
-
-# ... qolgan kodlaringiz
-env_path = Path(__file__).resolve().parent / ".env"
-load_dotenv(dotenv_path=env_path)
-
-TOKEN = os.getenv("BOT_TOKEN")
-if not TOKEN:
-    raise RuntimeError(
-        "BOT_TOKEN topilmadi! .env yoki hosting Environment Variables "
-        "ichiga BOT_TOKEN ni kiriting."
-    )
-
 # ============================================================
 # 1. ENVIRONMENT
 # ============================================================
 
-# .env faylining aniq manzilini ko'rsatib yuklaymiz
-env_path = Path(__file__).resolve().parent / ".env"
-load_dotenv(dotenv_path=env_path)
+load_dotenv()
 
-TOKEN = os.getenv("BOT_TOKEN")
+TOKEN = os.getenv("8586495198:AAEOx_q68HKUnIthJOcJHwTW_qNn4YlvM5I")
 if not TOKEN:
     raise RuntimeError(
         "BOT_TOKEN topilmadi! .env yoki hosting Environment Variables "
