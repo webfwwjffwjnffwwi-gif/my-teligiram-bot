@@ -52,7 +52,6 @@ threading.Thread(target=run_web_server, daemon=True).start()
 
 ADMIN_ID = 8528296825  # Telegram ID
 
-# 📢 MAJBURIY OBUNA KANALLARI RO'YXATI
 REQUIRED_CHANNELS = [
     "@Animelar_olami_uz_01",
 ]
@@ -512,21 +511,22 @@ async def episode_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ADD_EPISODE_NUMBER
 
     context.user_data["episode_number"] = int(text)
-    await update.message.reply_text("📹 <b>Endi ushbu qismning videosini yuboring:</b> 📲")
+    await update.message.reply_text("📹 <b>Endi ushbu qismning videosini yuboring:</b> 📲", parse_mode="HTML")
     return ADD_EPISODE_VIDEO
 
 async def episode_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message.video:
+    video = update.message.video or update.message.document
+    if not video:
         await update.message.reply_text("❌ Iltimos, video fayl yuboring!")
         return ADD_EPISODE_VIDEO
 
-    video_file_id = update.message.video.file_id
+    video_file_id = video.file_id
     anime_id = context.user_data.get("episode_anime_id")
     ep_num = context.user_data.get("episode_number")
     anime_name = context.user_data.get("episode_anime_name", "Anime")
 
     if not anime_id or not ep_num:
-        await update.message.reply_text("❌ Ma'lumotlarda xatolik bo'ldi. Qat'iydan qayta urinib ko'ring.")
+        await update.message.reply_text("❌ Seans xatosi. /admin menyusidan qayta urinib ko'ring.")
         return ConversationHandler.END
 
     connection = db_connect()
@@ -929,7 +929,9 @@ def main():
                 CallbackQueryHandler(choose_episode_anime, pattern=r"^episode_anime_\d+$"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, episode_number),
             ],
-            ADD_EPISODE_VIDEO: [MessageHandler(filters.VIDEO, episode_video)],
+            ADD_EPISODE_VIDEO: [
+                MessageHandler(filters.VIDEO | filters.Document.ALL, episode_video)
+            ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
