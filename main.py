@@ -2516,7 +2516,7 @@ def main():
     )
 
     # -------------------------
-    | # BROADCAST CONVERSATION
+     # BROADCAST CONVERSATION
     # -------------------------
 
     broadcast_conv = ConversationHandler(
