@@ -10,6 +10,7 @@ from sqlalchemy import (
     create_engine,
     Column,
     Integer,
+    BigInteger, # <-- Telegram ID sig'ishi uchun qo'shildi
     String,
     ForeignKey,
     UniqueConstraint,
@@ -33,7 +34,7 @@ from telegram.ext import (
 
 load_dotenv()
 
-TOKEN = os.getenv("8586495198:AAEOx_q68HKUnIthJOcJHwTW_qNn4YlvM5I")
+TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
     raise RuntimeError(
         "BOT_TOKEN topilmadi! .env yoki hosting Environment Variables "
@@ -157,7 +158,7 @@ class User(Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    telegram_id = Column(Integer, unique=True, nullable=False)
+    telegram_id = Column(BigInteger, unique=True, nullable=False)  # <-- BigInteger qilindi
     username = Column(String, nullable=True)
     first_name = Column(String, nullable=True)
     last_anime_id = Column(Integer, nullable=True)
@@ -168,7 +169,7 @@ class Favorite(Base):
     __tablename__ = "favorites"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(Integer, nullable=False)
+    user_id = Column(BigInteger, nullable=False)  # <-- Xavfsizlik uchun bu ham BigInteger qilindi
     anime_id = Column(Integer, nullable=False)
 
     __table_args__ = (
@@ -598,9 +599,10 @@ async def admin(
         return
 
     if not is_admin(update.effective_user.id):
-        await update.message.reply_text(
-            "🚫 Kechirasiz, siz admin emassiz!"
-        )
+        if update.message:
+            await update.message.reply_text(
+                "🚫 Kechirasiz, siz admin emassiz!"
+            )
         return
 
     await send_admin_panel(update)
@@ -897,8 +899,11 @@ async def broadcast_send(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
-    if not is_admin(update.effective_user.id):
+    if not update.effective_user or not is_admin(update.effective_user.id):
         return ConversationHandler.END
+
+    if not update.message:
+        return BROADCAST_MESSAGE
 
     message_text = update.message.text.strip()
 
@@ -973,6 +978,9 @@ async def add_anime_name(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
+    if not update.message:
+        return ADD_ANIME_NAME
+
     name = update.message.text.strip()
 
     if not name:
@@ -995,6 +1003,9 @@ async def add_anime_genre(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
+    if not update.message:
+        return ADD_ANIME_GENRE
+
     genre = update.message.text.strip()
 
     if not genre:
@@ -1017,6 +1028,9 @@ async def add_anime_description(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
+    if not update.message:
+        return ADD_ANIME_DESCRIPTION
+
     name = context.user_data.get("anime_name")
     genre = context.user_data.get("anime_genre")
     description = update.message.text.strip()
@@ -1212,6 +1226,9 @@ async def episode_number(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
+    if not update.message:
+        return ADD_EPISODE_NUMBER
+
     text = update.message.text.strip()
 
     if not text.isdigit() or int(text) <= 0:
@@ -1789,7 +1806,7 @@ async def toggle_favorite(
             session.commit()
 
             await query.answer(
-                "❌ Saralanganlerden olib tashlandi!",
+                "❌ Saralanganlardan olib tashlandi!",
                 show_alert=True,
             )
 
@@ -2499,7 +2516,7 @@ def main():
     )
 
     # -------------------------
-    # BROADCAST CONVERSATION
+    | # BROADCAST CONVERSATION
     # -------------------------
 
     broadcast_conv = ConversationHandler(
