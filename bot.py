@@ -4,177 +4,36 @@ import os
 from pathlib import Path
 from threading import Thread
 
-from aiogram import Bot, Dispatcher, F, Router
-from aiogram.filters import CommandStart
-from aiogram.types import (
-    CallbackQuery,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    Message,
-)
 from dotenv import load_dotenv
 from flask import Flask
-from sqlalchemy import (
-    BigInteger,
-    Column,
-    ForeignKey,
-    Integer,
-    String,
-    UniqueConstraint,
-    create_engine,
+
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    ContextTypes,
+    CallbackQueryHandler,
+    ConversationHandler,
+    MessageHandler,
+    filters,
 )
-from sqlalchemy.orm import declarative_base, scoped_session, sessionmaker
 
-# ============================================================
-# 1. ENVIRONMENT VA ASOSIY SOZLAMALAR
-# ============================================================
-load_dotenv()
-
-# Loglarni sozlash
-logging.basicConfig(level=logging.INFO)
-
-# Flask serveri (Render yoki boshqa hostinglar uchun uxlashni oldini olish maqsadida)
-app = Flask(__name__)
-
-
-@app.route("/")
-def home():
-  return "Bot ishlayapti!"
-
-
-def run_flask():
-  port = int(os.getenv("PORT", 5000))
-  app.run(host="0.0.0.0", port=port)
+from sqlalchemy import (
+    create_engine,
+    Column,
+    Integer,
+    BigInteger,
+    String,
+    ForeignKey,
+    UniqueConstraint,
+)
+from sqlalchemy.orm import declarative_base, sessionmaker, scoped_session
 
 
 # ============================================================
-# 2. DATABASE (SQLALCHEMY) SOZLAMALARI
+# 1. ENVIRONMENT
 # ============================================================
-Base = declarative_base()
-# O'z bazangiz URL manzilini env'dan olasiz yoki bu yerga yozasiz
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///hosildor.db")
-engine = create_engine(DATABASE_URL)
-session_factory = sessionmaker(bind=engine)
-Session = scoped_session(session_factory)
 
-
-# Misol uchun foydalanuvchilar jadvali (kerak bo'lsa kengaytirasiz)
-class User(Base):
-  __tablename__ = "users"
-
-  id = Column(Integer, primary_key=True)
-  telegram_id = Column(BigInteger, unique=True, nullable=False)
-  full_name = Column(String, nullable=True)
-  is_instagram_subscribed = Column(Integer, default=0)  # 0 - yo'q, 1 - ha
-
-
-# Bazani yaratish
-Base.metadata.create_all(engine)
-
-# ============================================================
-# 3. AIOGRAM ROUTER VA INSTAGRAM MAJBURIY OBUNA
-# ============================================================
-router = Router()
-
-
-def get_instagram_kb():
-  keyboard = InlineKeyboardMarkup(
-      inline_keyboard=[
-          [
-              InlineKeyboardButton(
-                  text="🔗 Instagram'ga o'tish",
-                  url="https://instagram.com/aneblok_n1",
-              )
-          ],
-          [
-              InlineKeyboardButton(
-                  text="✅ Obuna bo'ldim", callback_data="check_instagram"
-              )
-          ],
-      ]
-  )
-  return keyboard
-
-
-@router.message(CommandStart())
-async def cmd_start(message: Message):
-  user_id = message.from_user.id
-  session = Session()
-  try:
-    # Foydalanuvchi bazada bormi yoki yo'qligini tekshiramiz
-    user = session.query(User).filter_by(telegram_id=user_id).first()
-    if not user:
-      user = User(
-          telegram_id=user_id,
-          full_name=message.from_user.full_name,
-          is_instagram_subscribed=0,
-      )
-      session.add(user)
-      session.commit()
-
-    # Agar Instagram'ga obuna bo'lmagan bo'lsa
-    if user.is_instagram_subscribed == 0:
-      await message.answer(
-          "Salom! Botdan foydalanish uchun avval Instagram sahifamizga obuna"
-          " bo'ling:",
-          reply_markup=get_instagram_kb(),
-      )
-    else:
-      await message.answer(
-          "Xush kelibsiz! Siz allaqachon obuna bo'lgansiz. Botdan foydalanishingiz"
-          " mumkin."
-      )
-  finally:
-    session.close()
-
-
-@router.callback_query(F.data == "check_instagram")
-async def check_instagram_sub(callback: CallbackQuery):
-  user_id = callback.from_user.id
-  session = Session()
-  try:
-    user = session.query(User).filter_by(telegram_id=user_id).first()
-    if user:
-      user.is_instagram_subscribed = 1
-      session.commit()
-
-    await callback.message.edit_text(
-        "Rahmat! Obuna tasdiqlandi. Endi botdan foydalanishingiz mumkin."
-    )
-    await callback.answer()
-  finally:
-    session.close()
-
-
-# ============================================================
-# 4. BOTNI ISHGA TUSHIRISH (MAIN)
-# ============================================================
-async def main():
-  TOKEN = os.getenv("BOT_TOKEN")
-  if not TOKEN:
-    logging.error("BOT_TOKEN topilmadi! .env faylni tekshiring.")
-    return
-
-  bot = Bot(token=TOKEN)
-  dp = Dispatcher()
-
-  # Routerni dispatcherga ulash
-  dp.include_router(router)
-
-  # Flask serverini alohida oqimda (Thread) ishga tushirish
-  flask_thread = Thread(target=run_flask)
-  flask_thread.daemon = True
-  flask_thread.start()
-
-  logging.info("Bot ishga tushdi...")
-  await dp.start_polling(bot)
-
-
-if __name__ == "__main__":
-  import asyncio
-
-  asyncio.run(main())
-  
 env_path = Path(__file__).resolve().parent / ".env"
 load_dotenv(dotenv_path=env_path)
 
