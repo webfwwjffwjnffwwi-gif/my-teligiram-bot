@@ -2547,7 +2547,7 @@ def main():
             )
         ],
         states={
-            BROADCAST_MESSAGE: [
+            BROAD_MESSAGE: [
                 MessageHandler(
                     filters.TEXT & ~filters.COMMAND,
                     broadcast_send,

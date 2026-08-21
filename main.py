@@ -10,7 +10,7 @@ from sqlalchemy import (
     create_engine,
     Column,
     Integer,
-    BigInteger, # <-- Telegram ID sig'ishi uchun qo'shildi
+    BigInteger,
     String,
     ForeignKey,
     UniqueConstraint,
@@ -158,7 +158,7 @@ class User(Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    telegram_id = Column(BigInteger, unique=True, nullable=False)  # <-- BigInteger qilindi
+    telegram_id = Column(BigInteger, unique=True, nullable=False)
     username = Column(String, nullable=True)
     first_name = Column(String, nullable=True)
     last_anime_id = Column(Integer, nullable=True)
@@ -169,7 +169,7 @@ class Favorite(Base):
     __tablename__ = "favorites"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(BigInteger, nullable=False)  # <-- Xavfsizlik uchun bu ham BigInteger qilindi
+    user_id = Column(BigInteger, nullable=False)
     anime_id = Column(Integer, nullable=False)
 
     __table_args__ = (
@@ -236,6 +236,20 @@ def save_user(user_data):
 ADD_EPISODE_NUMBER, ADD_EPISODE_VIDEO = range(3, 5)
 
 BROADCAST_MESSAGE = 5
+
+# Yangi tahrirlash state'lari
+(
+    EDIT_ANIME_SELECT,
+    EDIT_ANIME_FIELD,
+    EDIT_ANIME_VALUE,
+) = range(6, 9)
+
+(
+    EDIT_EPISODE_SELECT_ANIME,
+    EDIT_EPISODE_SELECT_NUM,
+    EDIT_EPISODE_FIELD,
+    EDIT_EPISODE_VALUE,
+) = range(9, 13)
 
 
 # ============================================================
@@ -400,8 +414,20 @@ def admin_keyboard():
             ],
             [
                 InlineKeyboardButton(
+                    "✏️ Anime tahrirlash",
+                    callback_data="edit_anime_start",
+                )
+            ],
+            [
+                InlineKeyboardButton(
                     "📺 Yangi qism qo'shish 🎬",
                     callback_data="add_episode",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "🎬 Qism tahrirlash",
+                    callback_data="edit_episode_start",
                 )
             ],
             [
@@ -1090,6 +1116,157 @@ async def add_anime_description(
 
 
 # ============================================================
+# 12.1. EDIT ANIME (YANGI QO'SHILGAN)
+# ============================================================
+
+async def edit_anime_start(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    query = update.callback_query
+    await query.answer()
+
+    if not is_admin(query.from_user.id):
+        return ConversationHandler.END
+
+    session = Session()
+    try:
+        anime_list = session.query(Anime.id, Anime.name).order_by(Anime.id.desc()).all()
+    finally:
+        Session.remove()
+
+    if not anime_list:
+        await query.edit_message_text(
+            "❌ Tahrirlash uchun animelar mavjud emas.",
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("⬅️ Orqaga", callback_data="back_admin")]]
+            ),
+        )
+        return ConversationHandler.END
+
+    keyboard = []
+    for anime_id, name in anime_list:
+        keyboard.append([
+            InlineKeyboardButton(
+                f"🆔 {anime_id} | 🎌 {name}",
+                callback_data=f"edit_anime_sel_{anime_id}"
+            )
+        ])
+    keyboard.append([InlineKeyboardButton("⬅️ Bekor qilish", callback_data="back_admin")])
+
+    await query.edit_message_text(
+        "✏️ <b>ANIMENI TAHRIRLASH</b>\n\nTahrirlamoqchi bo'lgan animeni tanlang:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="HTML"
+    )
+    return EDIT_ANIME_SELECT
+
+
+async def edit_anime_selected(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    query = update.callback_query
+    await query.answer()
+
+    if not is_admin(query.from_user.id):
+        return ConversationHandler.END
+
+    try:
+        anime_id = int(query.data.split("_")[-1])
+    except (ValueError, IndexError):
+        await query.edit_message_text("❌ Noto'g'ri ID.")
+        return ConversationHandler.END
+
+    context.user_data["edit_anime_id"] = anime_id
+
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("Nomi (name)", callback_data="field_name"),
+            InlineKeyboardButton("Janri (genre)", callback_data="field_genre"),
+        ],
+        [
+            InlineKeyboardButton("Tavsif (description)", callback_data="field_description"),
+        ],
+        [
+            InlineKeyboardButton("⬅️ Bekor qilish", callback_data="back_admin"),
+        ]
+    ])
+
+    await query.edit_message_text(
+        f"🛠 <b>Anime ID: {anime_id}</b>\n\nQaysi qismini o'zgartirmoqchisiz?",
+        reply_markup=keyboard,
+        parse_mode="HTML"
+    )
+    return EDIT_ANIME_FIELD
+
+
+async def edit_anime_field_chosen(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    query = update.callback_query
+    await query.answer()
+
+    if not is_admin(query.from_user.id):
+        return ConversationHandler.END
+
+    field = query.data.replace("field_", "")
+    context.user_data["edit_anime_field"] = field
+
+    await query.edit_message_text(
+        f"✍️ Tanlangan maydon: <b>{field}</b>\n\nUshbu maydon uchun yangi qiymatni kiriting:",
+        parse_mode="HTML"
+    )
+    return EDIT_ANIME_VALUE
+
+
+async def edit_anime_save_value(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    if not update.message:
+        return EDIT_ANIME_VALUE
+
+    new_value = update.message.text.strip()
+    anime_id = context.user_data.get("edit_anime_id")
+    field = context.user_data.get("edit_anime_field")
+
+    if not anime_id or not field:
+        await update.message.reply_text("❌ Xatolik yuz berdi. /admin orqali qaytadan urinib ko'ring.")
+        context.user_data.clear()
+        return ConversationHandler.END
+
+    session = Session()
+    try:
+        anime = session.query(Anime).filter_by(id=anime_id).first()
+        if not anime:
+            await update.message.reply_text("❌ Anime topilmadi.")
+        else:
+            if field == "name":
+                anime.name = new_value
+            elif field == "genre":
+                anime.genre = new_value
+            elif field == "description":
+                anime.description = new_value
+            
+            session.commit()
+            await update.message.reply_text(
+                f"✅ <b>Anime muvaffaqiyatli tahrirlandi!</b>\n\nID: {anime_id}\nMaydon: {field}\nYangi qiymat: {html.escape(new_value)}",
+                parse_mode="HTML"
+            )
+    except Exception as e:
+        session.rollback()
+        logger.exception("Anime tahrirlashda xatolik: %s", e)
+        await update.message.reply_text("❌ Bazaga saqlashda xatolik yuz berdi.")
+    finally:
+        Session.remove()
+
+    context.user_data.clear()
+    return ConversationHandler.END
+
+
+# ============================================================
 # 13. ADD EPISODE
 # ============================================================
 
@@ -1368,6 +1545,208 @@ async def episode_video(
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML",
     )
+
+    context.user_data.clear()
+    return ConversationHandler.END
+
+
+# ============================================================
+# 13.1. EDIT EPISODE (YANGI QO'SHILGAN)
+# ============================================================
+
+async def edit_episode_start(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    query = update.callback_query
+    await query.answer()
+
+    if not is_admin(query.from_user.id):
+        return ConversationHandler.END
+
+    session = Session()
+    try:
+        anime_list = session.query(Anime.id, Anime.name).order_by(Anime.id.desc()).all()
+    finally:
+        Session.remove()
+
+    if not anime_list:
+        await query.edit_message_text(
+            "❌ Animelar mavjud emas.",
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("⬅️ Orqaga", callback_data="back_admin")]]
+            ),
+        )
+        return ConversationHandler.END
+
+    keyboard = []
+    for anime_id, name in anime_list:
+        keyboard.append([
+            InlineKeyboardButton(
+                f"🆔 {anime_id} | 🎌 {name}",
+                callback_data=f"edit_ep_anime_{anime_id}"
+            )
+        ])
+    keyboard.append([InlineKeyboardButton("⬅️ Bekor qilish", callback_data="back_admin")])
+
+    await query.edit_message_text(
+        "🎬 <b>QISMNI TAHRIRLASH</b>\n\nQaysi anime qismini tahrirlamoqchisiz? Animeni tanlang:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="HTML"
+    )
+    return EDIT_EPISODE_SELECT_ANIME
+
+
+async def edit_episode_anime_chosen(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    query = update.callback_query
+    await query.answer()
+
+    if not is_admin(query.from_user.id):
+        return ConversationHandler.END
+
+    try:
+        anime_id = int(query.data.split("_")[-1])
+    except (ValueError, IndexError):
+        await query.edit_message_text("❌ Noto'g'ri ID.")
+        return ConversationHandler.END
+
+    context.user_data["edit_ep_anime_id"] = anime_id
+
+    session = Session()
+    try:
+        episodes = session.query(Episode.episode_number).filter_by(anime_id=anime_id).order_by(Episode.episode_number.asc()).all()
+    finally:
+        Session.remove()
+
+    if not episodes:
+        await query.edit_message_text(
+            "❌ Bu anime uchun hali qismlar kiritilmagan.",
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("⬅️ Orqaga", callback_data="back_admin")]]
+            ),
+        )
+        return ConversationHandler.END
+
+    keyboard = []
+    row = []
+    for (ep_num,) in episodes:
+        row.append(InlineKeyboardButton(f"{ep_num}-qism", callback_data=f"edit_ep_num_{ep_num}"))
+        if len(row) == 3:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+
+    keyboard.append([InlineKeyboardButton("⬅️ Bekor qilish", callback_data="back_admin")])
+
+    await query.edit_message_text(
+        "📺 Tahrirlamoqchi bo'lgan qism raqamini tanlang:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="HTML"
+    )
+    return EDIT_EPISODE_SELECT_NUM
+
+
+async def edit_episode_num_chosen(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    query = update.callback_query
+    await query.answer()
+
+    if not is_admin(query.from_user.id):
+        return ConversationHandler.END
+
+    try:
+        ep_num = int(query.data.split("_")[-1])
+    except (ValueError, IndexError):
+        await query.edit_message_text("❌ Noto'g'ri qism raqami.")
+        return ConversationHandler.END
+
+    context.user_data["edit_ep_number"] = ep_num
+
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("Qism raqamini o'zgartirish", callback_data="ep_field_number"),
+            InlineKeyboardButton("Videosini o'zgartirish (file_id)", callback_data="ep_field_video"),
+        ],
+        [
+            InlineKeyboardButton("⬅️ Bekor qilish", callback_data="back_admin"),
+        ]
+    ])
+
+    await query.edit_message_text(
+        f"🛠 Tanlangan qism: <b>{ep_num}-qism</b>\n\nNimasini o'zgartirmoqchisiz?",
+        reply_markup=keyboard,
+        parse_mode="HTML"
+    )
+    return EDIT_EPISODE_FIELD
+
+
+async def edit_episode_field_chosen(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    query = update.callback_query
+    await query.answer()
+
+    if not is_admin(query.from_user.id):
+        return ConversationHandler.END
+
+    field = query.data.replace("ep_field_", "")
+    context.user_data["edit_ep_field"] = field
+
+    if field == "number":
+        await query.edit_message_text("🔢 Qism uchun yangi raqamni kiriting:", parse_mode="HTML")
+    else:
+        await query.edit_message_text("📹 Qism uchun yangi **video fayl** yuboring:", parse_mode="HTML")
+
+    return EDIT_EPISODE_VALUE
+
+
+async def edit_episode_save_value(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    if not update.message:
+        return EDIT_EPISODE_VALUE
+
+    anime_id = context.user_data.get("edit_ep_anime_id")
+    old_ep_num = context.user_data.get("edit_ep_number")
+    field = context.user_data.get("edit_ep_field")
+
+    session = Session()
+    try:
+        episode = session.query(Episode).filter_by(anime_id=anime_id, episode_number=old_ep_num).first()
+        if not episode:
+            await update.message.reply_text("❌ Qism topilmadi.")
+        else:
+            if field == "number":
+                text_val = update.message.text.strip()
+                if not text_val.isdigit():
+                    await update.message.reply_text("❌ Faqat raqam kiriting!")
+                    return EDIT_EPISODE_VALUE
+                episode.episode_number = int(text_val)
+                session.commit()
+                await update.message.reply_text(f"✅ Qism raqami {text_val}-qismga o'zgartirildi!")
+            else:
+                msg = update.message
+                video = msg.video or msg.document or msg.animation or msg.video_note
+                if not video:
+                    await msg.reply_text("❌ Iltimos, video fayl yuboring!")
+                    return EDIT_EPISODE_VALUE
+                episode.file_id = video.file_id
+                session.commit()
+                await msg.reply_text("✅ Qism videosi muvaffaqiyatli yangilandi!")
+    except Exception as e:
+        session.rollback()
+        logger.exception("Qismni tahrirlashda xatolik: %s", e)
+        await update.message.reply_text("❌ Tahrirlashda xatolik yuz berdi.")
+    finally:
+        Session.remove()
 
     context.user_data.clear()
     return ConversationHandler.END
@@ -2474,6 +2853,30 @@ def main():
     )
 
     # -------------------------
+    # EDIT ANIME CONVERSATION (YANGI)
+    # -------------------------
+    edit_anime_conv = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(edit_anime_start, pattern=r"^edit_anime_start$")
+        ],
+        states={
+            EDIT_ANIME_SELECT: [
+                CallbackQueryHandler(edit_anime_selected, pattern=r"^edit_anime_sel_\d+$")
+            ],
+            EDIT_ANIME_FIELD: [
+                CallbackQueryHandler(edit_anime_field_chosen, pattern=r"^field_(name|genre|description)$")
+            ],
+            EDIT_ANIME_VALUE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, edit_anime_save_value)
+            ],
+        },
+        fallbacks=[
+            CommandHandler("cancel", cancel),
+            CallbackQueryHandler(cancel, pattern=r"^back_admin$"),
+        ],
+    )
+
+    # -------------------------
     # ADD EPISODE CONVERSATION
     # -------------------------
 
@@ -2516,7 +2919,41 @@ def main():
     )
 
     # -------------------------
-     # BROADCAST CONVERSATION
+    # EDIT EPISODE CONVERSATION (YANGI)
+    # -------------------------
+    edit_episode_conv = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(edit_episode_start, pattern=r"^edit_episode_start$")
+        ],
+        states={
+            EDIT_EPISODE_SELECT_ANIME: [
+                CallbackQueryHandler(edit_episode_anime_chosen, pattern=r"^edit_ep_anime_\d+$")
+            ],
+            EDIT_EPISODE_SELECT_NUM: [
+                CallbackQueryHandler(edit_episode_num_chosen, pattern=r"^edit_ep_num_\d+$")
+            ],
+            EDIT_EPISODE_FIELD: [
+                CallbackQueryHandler(edit_episode_field_chosen, pattern=r"^ep_field_(number|video)$")
+            ],
+            EDIT_EPISODE_VALUE: [
+                MessageHandler(
+                    filters.TEXT & ~filters.COMMAND
+                    | filters.VIDEO
+                    | filters.Document.VIDEO
+                    | filters.ANIMATION
+                    | filters.VIDEO_NOTE,
+                    edit_episode_save_value
+                )
+            ],
+        },
+        fallbacks=[
+            CommandHandler("cancel", cancel),
+            CallbackQueryHandler(cancel, pattern=r"^back_admin$"),
+        ],
+    )
+
+    # -------------------------
+    # BROADCAST CONVERSATION
     # -------------------------
 
     broadcast_conv = ConversationHandler(
@@ -2559,7 +2996,9 @@ def main():
     )
 
     application.add_handler(add_anime_conv)
+    application.add_handler(edit_anime_conv)
     application.add_handler(add_episode_conv)
+    application.add_handler(edit_episode_conv)
     application.add_handler(broadcast_conv)
 
     application.add_handler(
