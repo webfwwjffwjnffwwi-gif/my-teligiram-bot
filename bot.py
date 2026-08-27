@@ -321,7 +321,8 @@ async def send_sub_request(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
-    keyboard = []
+
+  keyboard = []
 
     for channel in REQUIRED_CHANNELS:
         display_channel = (
@@ -339,6 +340,17 @@ async def send_sub_request(
             ]
         )
 
+    # --- SHU YERGA INSTAGRAM TUGMASINI QO'SHASIZ ---
+    keyboard.append(
+        [
+            InlineKeyboardButton(
+                "📥 Instagram sahifaga o'tish",
+                url="https://instagram.com/aneblik_n1"
+            )
+        ]
+    )
+    # -----------------------------------------------
+
     keyboard.append(
         [
             InlineKeyboardButton(
@@ -351,7 +363,7 @@ async def send_sub_request(
     text = (
         "🚨 <b>DIQQAT!</b>\n\n"
         "Botdan foydalanish uchun quyidagi barcha "
-        "kanallarga a'zo bo'ling."
+        "kanallarga va Instagram sahifamizga a'zo bo'ling." # xohlasangiz matnni ham ozgina o'zgartirishingiz mumkin
     )
 
     markup = InlineKeyboardMarkup(keyboard)
@@ -1052,6 +1064,52 @@ async def add_anime_description(
         context.user_data.clear()
         return ConversationHandler.END
 
+    return ADD_ANIME_GENRE
+
+
+async def add_anime_genre(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    if not update.message:
+        return ADD_ANIME_GENRE
+
+    genre = update.message.text.strip()
+
+    if not genre:
+        await update.message.reply_text(
+            "❌ Janr bo'sh bo'lmasin."
+        )
+        return ADD_ANIME_GENRE
+
+    context.user_data["anime_genre"] = genre
+
+    await update.message.reply_text(
+        "📝 <b>Anime haqida qisqacha tavsif kiriting:</b>",
+        parse_mode="HTML",
+    )
+
+    return ADD_ANIME_DESCRIPTION
+
+
+async def add_anime_description(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    if not update.message:
+        return ADD_ANIME_DESCRIPTION
+
+    name = context.user_data.get("anime_name")
+    genre = context.user_data.get("anime_genre")
+    description = update.message.text.strip()
+
+    if not name or not genre:
+        await update.message.reply_text(
+            "❌ Seans ma'lumotlari topilmadi. /admin orqali qayta boshlang."
+        )
+        context.user_data.clear()
+        return ConversationHandler.END
+
     if not description:
         await update.message.reply_text(
             "❌ Tavsif bo'sh bo'lmasin."
@@ -1139,86 +1197,6 @@ async def add_episode_start(
             ),
         )
         return ConversationHandler.END
-
-    keyboard = []
-
-    for anime_id, name in anime_list:
-        keyboard.append(
-            [
-                InlineKeyboardButton(
-                    f"🆔 {anime_id} | 🎌 {name}",
-                    callback_data=f"episode_anime_{anime_id}",
-                )
-            ]
-        )
-
-    keyboard.append(
-        [
-            InlineKeyboardButton(
-                "⬅️ Bekor qilish",
-                callback_data="back_admin",
-            )
-        ]
-    )
-
-    await query.edit_message_text(
-        "📺 <b>QISM QO'SHISH</b> 🎬\n\n"
-        "Qaysi animega qism qo'shmoqchisiz?",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="HTML",
-    )
-
-    return ADD_EPISODE_NUMBER
-
-
-async def choose_episode_anime(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-    query = update.callback_query
-    await query.answer()
-
-    if not is_admin(query.from_user.id):
-        return ConversationHandler.END
-
-    try:
-        anime_id = int(query.data.split("_")[-1])
-    except (ValueError, IndexError):
-        await query.edit_message_text("❌ Noto'g'ri anime ID.")
-        return ConversationHandler.END
-
-    session = Session()
-
-    try:
-        anime = (
-            session.query(Anime)
-            .filter_by(id=anime_id)
-            .first()
-        )
-
-        if anime is None:
-            await query.edit_message_text(
-                "❌ Anime topilmadi."
-            )
-            return ConversationHandler.END
-
-        anime_name = anime.name
-
-        max_ep = (
-            session.query(Episode.episode_number)
-            .filter_by(anime_id=anime_id)
-            .order_by(Episode.episode_number.desc())
-            .first()
-        )
-
-        max_ep_num = max_ep[0] if max_ep else 0
-        next_suggested = max_ep_num + 1
-
-    finally:
-        Session.remove()
-
-    context.user_data["episode_anime_id"] = anime_id
-    context.user_data["episode_anime_name"] = anime_name
 
     await query.edit_message_text(
         f"🎬 <b>Tanlangan anime:</b> "
