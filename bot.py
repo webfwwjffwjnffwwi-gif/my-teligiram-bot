@@ -324,7 +324,7 @@ async def send_sub_request(
 
   keyboard = []
 
-    for channel in REQUIRED_CHANNELS:
+  for channel in REQUIRED_CHANNELS:
         display_channel = (
             channel
             if channel.startswith("@")
