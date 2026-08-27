@@ -321,10 +321,9 @@ async def send_sub_request(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
+keyboard = []
 
-  keyboard = []
-
-  for channel in REQUIRED_CHANNELS:
+    for channel in REQUIRED_CHANNELS:
         display_channel = (
             channel
             if channel.startswith("@")
@@ -340,7 +339,6 @@ async def send_sub_request(
             ]
         )
 
-
     keyboard.append(
         [
             InlineKeyboardButton(
@@ -350,6 +348,14 @@ async def send_sub_request(
         ]
     )
 
+    keyboard.append(
+        [
+            InlineKeyboardButton(
+                "✅ Obunani tekshirish",
+                callback_data="check_subscription",
+            )
+        ]
+    )
     keyboard.append(
         [
             InlineKeyboardButton(
