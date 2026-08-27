@@ -2482,10 +2482,6 @@ def main():
         ],
         states={
             ADD_EPISODE_NUMBER: [
-                CallbackQueryHandler(
-                    choose_episode_anime,
-                    pattern=r"^episode_anime_\d+$",
-                ),
                 MessageHandler(
                     filters.TEXT & ~filters.COMMAND,
                     episode_number,
