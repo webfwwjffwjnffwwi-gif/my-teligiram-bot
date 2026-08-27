@@ -306,13 +306,13 @@ async def check_sub(
                 return False
 
         except Exception as e:
-        logger.error(
-            "Kanal obunasini tekshirishda xatolik (%s). "
-            "Bot kanalda ADMIN ekanini va username to'g'riligini tekshiring: %s",
-            channel,
-            e,
-        )
-        return False
+            logger.error(
+                "Kanal obunasini tekshirishda xatolik (%s). "
+                "Bot kanalda ADMIN ekanini va username to'g'riligini tekshiring: %s",
+                channel,
+                e,
+            )
+            return False
 
     return True
 
@@ -362,7 +362,7 @@ async def check_sub(
         "Botdan foydalanish uchun quyidagi barcha "
         "kanallarga va Instagram sahifamizga a'zo bo'ling."
     )
-    
+
     markup = InlineKeyboardMarkup(keyboard)
 
     if update.callback_query:
