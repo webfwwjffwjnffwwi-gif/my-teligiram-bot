@@ -342,7 +342,6 @@ async def send_sub_request(
 
 
     keyboard.append(
-
         [
             InlineKeyboardButton(
                 "📥 Instagram sahifaga o'tish",
