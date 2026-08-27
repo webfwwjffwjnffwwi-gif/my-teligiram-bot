@@ -317,7 +317,7 @@ async def check_sub(
     return True
 
 
-    async def send_sub_request(
+async def send_sub_request(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
