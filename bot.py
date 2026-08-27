@@ -340,7 +340,6 @@ async def send_sub_request(
             ]
         )
 
-    # --- SHU YERGA INSTAGRAM TUGMASINI QO'SHASIZ ---
     keyboard.append(
         [
             InlineKeyboardButton(
@@ -349,7 +348,6 @@ async def send_sub_request(
             )
         ]
     )
-    # -----------------------------------------------
 
     keyboard.append(
         [
@@ -363,7 +361,7 @@ async def send_sub_request(
     text = (
         "🚨 <b>DIQQAT!</b>\n\n"
         "Botdan foydalanish uchun quyidagi barcha "
-        "kanallarga va Instagram sahifamizga a'zo bo'ling." # xohlasangiz matnni ham ozgina o'zgartirishingiz mumkin
+        "kanallarga va Instagram sahifamizga a'zo bo'ling."
     )
 
     markup = InlineKeyboardMarkup(keyboard)
