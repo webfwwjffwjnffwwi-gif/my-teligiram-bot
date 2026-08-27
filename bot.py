@@ -306,22 +306,22 @@ async def check_sub(
                 return False
 
         except Exception as e:
-            logger.error(
-                "Kanal obunasini tekshirishda xatolik (%s). "
-                "Bot kanalda ADMIN ekanini va username to'g'riligini tekshiring: %s",
-                channel,
-                e,
-            )
-            return False
+        logger.error(
+            "Kanal obunasini tekshirishda xatolik (%s). "
+            "Bot kanalda ADMIN ekanini va username to'g'riligini tekshiring: %s",
+            channel,
+            e,
+        )
+        return False
 
     return True
 
 
-async def send_sub_request(
+    async def send_sub_request(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
-keyboard = []
+    keyboard = []
 
     for channel in REQUIRED_CHANNELS:
         display_channel = (
@@ -356,21 +356,13 @@ keyboard = []
             )
         ]
     )
-    keyboard.append(
-        [
-            InlineKeyboardButton(
-                "✅ Obunani tekshirish",
-                callback_data="check_subscription",
-            )
-        ]
-    )
 
     text = (
         "🚨 <b>DIQQAT!</b>\n\n"
         "Botdan foydalanish uchun quyidagi barcha "
         "kanallarga va Instagram sahifamizga a'zo bo'ling."
     )
-
+    
     markup = InlineKeyboardMarkup(keyboard)
 
     if update.callback_query:
