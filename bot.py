@@ -1158,10 +1158,11 @@ async def add_anime_description(
 # 13. ADD EPISODE
 # ============================================================
 
-async def add_episode_start(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
+# ==========================================
+# QISM QO'SHISH MODULI (TO'LIQ VA MUKAMMAL)
+# ==========================================
+
+async def add_episode_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
@@ -1169,99 +1170,104 @@ async def add_episode_start(
         return ConversationHandler.END
 
     session = Session()
-
     try:
-        anime_list = (
-            session.query(Anime.id, Anime.name)
-            .order_by(Anime.id.desc())
-            .all()
-        )
+        anime_list = session.query(Anime.id, Anime.name).order_by(Anime.id.desc()).all()
     finally:
         Session.remove()
 
     if not anime_list:
         await query.edit_message_text(
             "❌ Qism qo'shish uchun avval anime yarating.",
-            reply_markup=InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton(
-                            "⬅️ Admin panel",
-                            callback_data="back_admin",
-                        )
-                    ]
-                ]
-            ),
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⬅️ Admin panel", callback_data="back_admin")]
+            ])
         )
         return ConversationHandler.END
 
-async def add_episode_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = []
+    for anime in anime_list:
+        keyboard.append([InlineKeyboardButton(anime.name, callback_data=f"select_anime_{anime.id}")])
+    
+    keyboard.append([InlineKeyboardButton("❌ Bekor qilish", callback_data="cancel_add")])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await query.edit_message_text(
+        text="🎬 <b>Qaysi animega qism qo'shmoqchisiz?</b>\n\nQuyidagilardan birini tanlang:",
+        reply_markup=reply_markup,
+        parse_mode="HTML"
+    )
+    return SELECTING_ANIME_FOR_EPISODE
+
+
+async def select_anime_for_episode(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    db = Session()
+    if not is_admin(query.from_user.id):
+        return ConversationHandler.END
+
+    data_parts = query.data.split("_")
+    if len(data_parts) < 3:
+        await query.edit_message_text("❌ Xatolik yuz berdi.")
+        return ConversationHandler.END
+
     try:
-        anime_list = db.query(Anime).all()
-        if not anime_list:
-            await query.edit_message_text("❌ Hozircha bazada animelar yo'q. Avval anime qo'shing!")
+        anime_id = int(data_parts[2])
+    except ValueError:
+        await query.edit_message_text("❌ Noto'g'ri anime ID.")
+        return ConversationHandler.END
+
+    session = Session()
+    try:
+        anime = session.query(Anime).filter_by(id=anime_id).first()
+        if not anime:
+            await query.edit_message_text("❌ Anime topilmadi.")
             return ConversationHandler.END
-
-        keyboard = []
-        for anime in anime_list:
-            keyboard.append([InlineKeyboardButton(anime.name, callback_data=f"select_anime_{anime.id}")])
-        
-        keyboard.append([InlineKeyboardButton("❌ Bekor qilish", callback_data="cancel_add")])
-        reply_markup = InlineKeyboardMarkup(keyboard)
-
-        await query.edit_message_text(
-            text="🎬 <b>Qaysi animega qism qo'shmoqchisiz?</b>\n\nQuyidagilardan birini tanlang:",
-            reply_markup=reply_markup,
-            parse_mode="HTML"
-        )
-        return SELECTING_ANIME_FOR_EPISODE  # Bu yerda animeni tanlash holatiga o'tadi
+        anime_name = anime.name
     finally:
-        db.close()
+        Session.remove()
+
+    context.user_data["episode_anime_id"] = anime_id
+    context.user_data["episode_anime_name"] = anime_name
+
+    await query.edit_message_text(
+        text=f"🎬 Anime: <b>{html.escape(anime_name)}</b>\n\n"
+             f"🔢 Endi ushbu anime uchun <b>qism raqamini</b> yuboring (QISIM: 1):\n\n"
+             f"Bekor qilish uchun /cancel ni bosing.",
+        parse_mode="HTML"
+    )
+    return ADD_EPISODE_NUMBER
 
 
-async def episode_number(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
+async def episode_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
         return ADD_EPISODE_NUMBER
 
     text = update.message.text.strip()
 
     if not text.isdigit() or int(text) <= 0:
-        await update.message.reply_text(
-            "❌ Iltimos, musbat raqam kiriting!"
-        )
+        await update.message.reply_text("❌ Iltimos, faqatgina raqamlardan foydalaning!")
         return ADD_EPISODE_NUMBER
 
     ep_num = int(text)
     anime_id = context.user_data.get("episode_anime_id")
 
     if not anime_id:
-        await update.message.reply_text(
-            "❌ Anime tanlanmagan. /admin orqali qayta urinib ko'ring."
-        )
+        await update.message.reply_text("❌ Anime tanlanmagan. /admin orqali qayta urinib ko'ring.")
         return ConversationHandler.END
 
     context.user_data["episode_number"] = ep_num
 
     await update.message.reply_text(
-        "📹 <b>Endi ushbu qismning videosini yuboring:</b> 📲\n\n"
-        "Bekor qilish: /cancel",
+        text=f"📹 <b>{ep_num}-Qism uchun videoni yuboring:</b> 📲\n\n"
+             f"Bekor qilish: /cancel",
         parse_mode="HTML",
     )
 
     return ADD_EPISODE_VIDEO
 
 
-async def episode_video(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
+async def episode_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
         return ADD_EPISODE_VIDEO
 
@@ -1275,37 +1281,26 @@ async def episode_video(
     )
 
     if not video:
-        await msg.reply_text(
-            "❌ Iltimos, video fayl yuboring!"
-        )
+        await msg.reply_text("❌ Iltimos, haqiqiy video fayl yuboring!")
         return ADD_EPISODE_VIDEO
 
     anime_id = context.user_data.get("episode_anime_id")
     ep_num = context.user_data.get("episode_number")
-    anime_name = context.user_data.get(
-        "episode_anime_name",
-        "Anime",
-    )
+    anime_name = context.user_data.get("episode_anime_name", "Anime")
 
     if not anime_id or not ep_num:
-        await msg.reply_text(
-            "❌ Seans xatosi. /admin menyusidan qayta urinib ko'ring."
-        )
+        await msg.reply_text("❌ Seans xatosi. /admin menyusidan qayta urinib ko'ring.")
         context.user_data.clear()
         return ConversationHandler.END
 
     video_file_id = video.file_id
-
     session = Session()
     success = False
 
     try:
         existing_ep = (
             session.query(Episode)
-            .filter_by(
-                anime_id=anime_id,
-                episode_number=ep_num,
-            )
+            .filter_by(anime_id=anime_id, episode_number=ep_num)
             .first()
         )
 
@@ -1322,50 +1317,35 @@ async def episode_video(
 
         session.commit()
         success = True
-
     except Exception as e:
         session.rollback()
-        logger.exception(
-            "Epizod saqlashda xatolik: %s",
-            e,
-        )
-
+        logger.exception("Epizod saqlashda xatolik: %s", e)
     finally:
         Session.remove()
 
     if not success:
-        await msg.reply_text(
-            "❌ Video bazaga saqlanmadi."
-        )
+        await msg.reply_text("❌ Video bazaga saqlanmadi. Xatolik yuz berdi.")
         return ConversationHandler.END
 
     keyboard = [
         [
             InlineKeyboardButton(
                 f"➕ Keyingi ({ep_num + 1}-qism)",
-                callback_data=(
-                    f"quick_add_next_{anime_id}_{ep_num + 1}"
-                ),
+                callback_data=f"quick_add_next_{anime_id}_{ep_num + 1}"
             )
         ],
         [
-            InlineKeyboardButton(
-                "📋 Qismlar ro'yxati",
-                callback_data=f"user_anime_{anime_id}_0",
-            )
+            InlineKeyboardButton("📋 Qismlar ro'yxati", callback_data=f"user_anime_{anime_id}_0")
         ],
         [
-            InlineKeyboardButton(
-                "⚙️ Admin panel",
-                callback_data="back_admin",
-            )
+            InlineKeyboardButton("⚙️ Admin panel", callback_data="back_admin")
         ],
     ]
 
     await msg.reply_text(
-        f"🎉 <b>{ep_num}-QISM MUVAFFAQIYATLI SAQLANDI!</b> 🎬\n\n"
-        f"🎌 Anime: <b>{html.escape(anime_name)}</b>\n"
-        f"📺 Epizod: <b>{ep_num}-qism</b>",
+        text=f"🎉 <b>{ep_num}-QISM MUVAFFAQIYATLI SAQLANDI!</b> 🎬\n\n"
+             f"🎌 Anime: <b>{html.escape(anime_name)}</b>\n"
+             f"📺 Epizod: <b>{ep_num}-qism</b>",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML",
     )
@@ -1374,10 +1354,7 @@ async def episode_video(
     return ConversationHandler.END
 
 
-async def quick_add_next_start(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
+async def quick_add_next_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
@@ -1385,39 +1362,24 @@ async def quick_add_next_start(
         return ConversationHandler.END
 
     parts = query.data.split("_")
-
     if len(parts) != 5:
-        await query.edit_message_text(
-            "❌ Noto'g'ri qism ma'lumoti."
-        )
+        await query.edit_message_text("❌ Noto'g'ri qism ma'lumoti.")
         return ConversationHandler.END
 
     try:
         anime_id = int(parts[3])
         next_ep = int(parts[4])
     except ValueError:
-        await query.edit_message_text(
-            "❌ Noto'g'ri qism ma'lumoti."
-        )
+        await query.edit_message_text("❌ Noto'g'ri qism ma'lumoti.")
         return ConversationHandler.END
 
     session = Session()
-
     try:
-        anime = (
-            session.query(Anime)
-            .filter_by(id=anime_id)
-            .first()
-        )
-
+        anime = session.query(Anime).filter_by(id=anime_id).first()
         if anime is None:
-            await query.edit_message_text(
-                "❌ Anime topilmadi."
-            )
+            await query.edit_message_text("❌ Anime topilmadi.")
             return ConversationHandler.END
-
         anime_name = anime.name
-
     finally:
         Session.remove()
 
@@ -1426,13 +1388,37 @@ async def quick_add_next_start(
     context.user_data["episode_anime_name"] = anime_name
 
     await query.edit_message_text(
-        f"🎬 <b>Anime:</b> {html.escape(anime_name)}\n\n"
-        f"📹 <b>{next_ep}-qism uchun video yuboring:</b> 📲\n\n"
-        "Bekor qilish: /cancel",
+        text=f"🎬 <b>Anime:</b> {html.escape(anime_name)}\n\n"
+             f"📹 <b>{next_ep}-qism uchun video yuboring:</b> 📲\n\n"
+             f"Bekor qilish uchun /cancel ni bosing.",
         parse_mode="HTML",
     )
 
     return ADD_EPISODE_VIDEO
+
+
+# ConversationHandler sozlamasi
+add_episode_conv = ConversationHandler(
+    entry_points=[
+        CallbackQueryHandler(add_episode_start, pattern="^add_episode$"),
+        CallbackQueryHandler(quick_add_next_start, pattern="^quick_add_next_"),
+    ],
+    states={
+        SELECTING_ANIME_FOR_EPISODE: [
+            CallbackQueryHandler(select_anime_for_episode, pattern="^select_anime_"),
+        ],
+        ADD_EPISODE_NUMBER: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, episode_number)
+        ],
+        ADD_EPISODE_VIDEO: [
+            MessageHandler(filters.VIDEO | filters.Document.ALL | filters.ANIMATION | filters.VIDEO_NOTE, episode_video)
+        ],
+    },
+    fallbacks=[
+        CommandHandler("cancel", cancel_conversation),
+        CallbackQueryHandler(cancel_add, pattern="^cancel_add$"),
+    ],
+)
 
 
 # ============================================================
