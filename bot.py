@@ -1195,12 +1195,22 @@ async def add_episode_start(
         )
         return ConversationHandler.END
 
+    async def add_episode_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    anime_name = context.user_data.get("anime_name", "Anime")
+    next_suggested = context.user_data.get("next_episode", 1)
+
+    text = (
+        f"🎬 <b>Tanlangan anime:</b> {html.escape(anime_name)}\n\n"
+        f"Masalan: <code>{next_suggested}</code>\n\n"
+        "<b>Qism raqamini kiriting</b>\n"
+        "Bekor qilish: /cancel"
+    )
+
     await query.edit_message_text(
-        text = f"🎬 <b>Tanlangan anime:</b> {html.escape(anime_name)}\n\nMasalan: <code>{next_suggested}</code>\n\nYangi qism raqamini kiriting:"
-        f"{html.escape(context.user_data.get('anime_name', 'Anime'))}\n\n"
-        f"🔢 <b>Qism raqamini kiriting</b>\n"
-        next_suggested = context.user_data.get("next_episode", 1)
-        "Bekor qilish: /cancel",
+        text=text,
         parse_mode="HTML",
     )
 
