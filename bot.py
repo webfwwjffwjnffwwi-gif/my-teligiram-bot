@@ -1197,7 +1197,7 @@ async def add_episode_start(
 
     await query.edit_message_text(
         f"🎬 <b>Tanlangan anime:</b> "
-        f"{html.escape(anime_name)}\n\n"
+        f"{html.escape(context.user_data.get('anime_name', 'Anime'))}\n\n"
         f"🔢 <b>Qism raqamini kiriting</b>\n"
         f"Masalan: <code>{next_suggested}</code>\n\n"
         "Bekor qilish: /cancel",
