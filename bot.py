@@ -1195,7 +1195,7 @@ async def add_episode_start(
         )
         return ConversationHandler.END
 
-    async def add_episode_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def add_episode_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
