@@ -1420,7 +1420,6 @@ add_episode_conv = ConversationHandler(
         ],
     },
     fallbacks=[
-        CommandHandler("cancel", cancel_conversation),
         CallbackQueryHandler(cancel_add, pattern="^cancel_add$"),
     ],
 )
