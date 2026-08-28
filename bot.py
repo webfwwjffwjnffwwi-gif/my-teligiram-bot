@@ -1199,22 +1199,28 @@ async def add_episode_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    anime_name = context.user_data.get("anime_name", "Anime")
-    next_suggested = context.user_data.get("next_episode", 1)
+    db = SessionLocal()
+    try:
+        anime_list = db.query(Anime).all()
+        if not anime_list:
+            await query.edit_message_text("❌ Hozircha bazada animelar yo'q. Avval anime qo'shing!")
+            return ConversationHandler.END
 
-    text = (
-        f"🎬 <b>Tanlangan anime:</b> {html.escape(anime_name)}\n\n"
-        f"Masalan: <code>{next_suggested}</code>\n\n"
-        "<b>Qism raqamini kiriting</b>\n"
-        "Bekor qilish: /cancel"
-    )
+        keyboard = []
+        for anime in anime_list:
+            keyboard.append([InlineKeyboardButton(anime.name, callback_data=f"select_anime_{anime.id}")])
+        
+        keyboard.append([InlineKeyboardButton("❌ Bekor qilish", callback_data="cancel_add")])
+        reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await query.edit_message_text(
-        text=text,
-        parse_mode="HTML",
-    )
-
-    return ADD_EPISODE_NUMBER
+        await query.edit_message_text(
+            text="🎬 <b>Qaysi animega qism qo'shmoqchisiz?</b>\n\nQuyidagilardan birini tanlang:",
+            reply_markup=reply_markup,
+            parse_mode="HTML"
+        )
+        return SELECTING_ANIME_FOR_EPISODE  # Bu yerda animeni tanlash holatiga o'tadi
+    finally:
+        db.close()
 
 
 async def episode_number(
