@@ -1423,6 +1423,13 @@ add_episode_conv = ConversationHandler(
         CallbackQueryHandler(cancel_add, pattern="^cancel_add$"),
     ],
 )
+
+async def cancel_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    context.user_data.clear()
+    await query.edit_message_text("❌ Amaliyot bekor qilindi.")
+    return ConversationHandler.END
     
 
 
