@@ -1199,7 +1199,7 @@ async def add_episode_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    db = SessionLocal()
+    db = Session()
     try:
         anime_list = db.query(Anime).all()
         if not anime_list:
