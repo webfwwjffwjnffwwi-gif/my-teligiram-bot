@@ -1423,13 +1423,6 @@ add_episode_conv = ConversationHandler(
         CallbackQueryHandler(cancel_add, pattern="^cancel_add$"),
     ],
 )
-
-async def cancel_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    context.user_data.clear()
-    await query.edit_message_text("❌ Amaliyot bekor qilindi.")
-    return ConversationHandler.END
     
 
 
@@ -2299,7 +2292,7 @@ async def callback_router(
 
         else:
             await query.answer(
-                "❌ Siz hali barcha kanallarga a'zo bo'lmagansiz!",
+                "❌ Siz hali barcha kanallarga a'zo bo'lmagansiz! Majburiy instagiram profel",
                 show_alert=True,
             )
 
@@ -2483,6 +2476,13 @@ def main():
     # ADD EPISODE CONVERSATION
     # -------------------------
 
+    async def cancel_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        context.user_data.clear()
+        await query.edit_message_text("❌ Amaliyot bekor qilindi.")
+        return ConversationHandler.END
+
     add_episode_conv = ConversationHandler(
         entry_points=[
             CallbackQueryHandler(
@@ -2494,9 +2494,10 @@ def main():
                 pattern=r"^quick_add_next_\d+_\d+$",
             ),
         ],
+        
         states={
             ADD_EPISODE_NUMBER: [
-                MessageHandler(
+                MessageHandlers( # Agar sizda MessageHandler bo'lsa shuni yozing
                     filters.TEXT & ~filters.COMMAND,
                     episode_number,
                 ),
@@ -2513,6 +2514,10 @@ def main():
         },
         fallbacks=[
             CommandHandler("cancel", cancel),
+            CallbackQueryHandler(
+                cancel_add,
+                pattern=r"^cancel_add$",
+            ),
             CallbackQueryHandler(
                 cancel,
                 pattern=r"^back_admin$",
