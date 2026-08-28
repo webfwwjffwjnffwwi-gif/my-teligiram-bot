@@ -1196,7 +1196,7 @@ async def add_episode_start(
         return ConversationHandler.END
 
     await query.edit_message_text(
-        f"🎬 <b>Tanlangan anime:</b> {html.escape(anime_name)}\n\n"
+        text = f"🎬 <b>Tanlangan anime:</b> {html.escape(anime_name)}\n\nMasalan: <code>{next_suggested}</code>\n\nYangi qism raqamini kiriting:"
         f"{html.escape(context.user_data.get('anime_name', 'Anime'))}\n\n"
         f"🔢 <b>Qism raqamini kiriting</b>\n"
         next_suggested = context.user_data.get("next_episode", 1)
