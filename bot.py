@@ -1397,6 +1397,11 @@ async def quick_add_next_start(update: Update, context: ContextTypes.DEFAULT_TYP
     return ADD_EPISODE_VIDEO
 
 
+  # Holatlar
+SELECTING_ANIME_FOR_EPISODE = "SELECTING_ANIME_FOR_EPISODE"
+ADD_EPISODE_NUMBER = "ADD_EPISODE_NUMBER"
+ADD_EPISODE_VIDEO = "ADD_EPISODE_VIDEO"
+
 # ConversationHandler sozlamasi
 add_episode_conv = ConversationHandler(
     entry_points=[
@@ -1419,6 +1424,7 @@ add_episode_conv = ConversationHandler(
         CallbackQueryHandler(cancel_add, pattern="^cancel_add$"),
     ],
 )
+    
 
 
 # ============================================================
