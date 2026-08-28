@@ -1199,7 +1199,7 @@ async def add_episode_start(
         f"🎬 <b>Tanlangan anime:</b> "
         f"{html.escape(context.user_data.get('anime_name', 'Anime'))}\n\n"
         f"🔢 <b>Qism raqamini kiriting</b>\n"
-        f"Masalan: <code>{next_suggested}</code>\n\n"
+        next_suggested = context.user_data.get("next_episode", 1)
         "Bekor qilish: /cancel",
         parse_mode="HTML",
     )
