@@ -2381,22 +2381,46 @@ async def callback_router(
 # 21. CANCEL
 # ============================================================
 
-async def cancel(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-    context.user_data.clear()
-
-    if update.callback_query:
-        await update.callback_query.answer()
-        await send_admin_panel(update)
-    elif update.message:
-        await update.message.reply_text(
-            "❌ Amal bekor qilindi.\n\n"
-            "/admin orqali panelni qayta ochishingiz mumkin."
-        )
-
-    return ConversationHandler.END
+add_episode_conv = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(
+                add_episode_start,
+                pattern=r"^add_episode$",
+            ),
+            CallbackQueryHandler(
+                quick_add_next_start,
+                pattern=r"^quick_add_next_\d+_\d+$",
+            ),
+        ],
+        states={
+            ADD_EPISODE_NUMBER: [
+                MessageHandler(
+                    filters.TEXT & ~filters.COMMAND,
+                    episode_number,
+                ),
+            ],
+            ADD_EPISODE_VIDEO: [
+                MessageHandler(
+                    filters.VIDEO
+                    | filters.Document.VIDEO
+                    | filters.ANIMATION
+                    | filters.VIDEO_NOTE,
+                    episode_video,
+                )
+            ],
+        },
+        fallbacks=[
+            CommandHandler("cancel", cancel),
+            CallbackQueryHandler(
+                cancel,
+                pattern=r"^cancel_add$",
+            ),
+            CallbackQueryHandler(
+                cancel,
+                pattern=r"^back_admin$",
+            ),
+        ],
+    )
 
 
 # ============================================================
@@ -2476,13 +2500,6 @@ def main():
     # ADD EPISODE CONVERSATION
     # -------------------------
 
-    async def cancel_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        context.user_data.clear()
-        await query.edit_message_text("❌ Amaliyot bekor qilindi.")
-        return ConversationHandler.END
-
     add_episode_conv = ConversationHandler(
         entry_points=[
             CallbackQueryHandler(
@@ -2497,7 +2514,7 @@ def main():
         
         states={
             ADD_EPISODE_NUMBER: [
-                MessageHandlers( # Agar sizda MessageHandler bo'lsa shuni yozing
+                MessageHandler(
                     filters.TEXT & ~filters.COMMAND,
                     episode_number,
                 ),
@@ -2514,10 +2531,7 @@ def main():
         },
         fallbacks=[
             CommandHandler("cancel", cancel),
-            CallbackQueryHandler(
-                cancel_add,
-                pattern=r"^cancel_add$",
-            ),
+
             CallbackQueryHandler(
                 cancel,
                 pattern=r"^back_admin$",
