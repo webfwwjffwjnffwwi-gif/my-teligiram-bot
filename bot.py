@@ -6,6 +6,8 @@ from threading import Thread
 
 from dotenv import load_dotenv
 from flask import Flask
+from flask import send_from_directory
+
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -100,6 +102,18 @@ def home():
 @web_app.route("/health")
 def health():
     return "OK"
+
+WEBAPP_DIR = Path(__file__).resolve().parent / "webapp"
+
+
+@web_app.route("/webapp/")
+def webapp_index():
+    return send_from_directory(WEBAPP_DIR, "index.html")
+
+
+@web_app.route("/webapp/<path:filename>")
+def webapp_static(filename):
+    return send_from_directory(WEBAPP_DIR, filename)
 
 
 def run_web_server():
