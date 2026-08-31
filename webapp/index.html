@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Uzbekcha Animelar - WebApp</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        :root {
+            --bg-dark: #121214;
+            --gold-glow: #ffd700;
+            --red-glow: #ff073a;
+            --green-glow: #00ff66;
+            --text-light: #ffffff;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-dark);
+            color: var(--text-light);
+            padding: 15px;
+            overflow-x: hidden;
+        }
+
+        /* Navigatsiya menyusi (Teppada qator-ma-qator) */
+        .top-menu {
+            display: flex;
+            justify-content: space-around;
+            background: rgba(255, 255, 255, 0.05);
+            padding: 10px;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 215, 0, 0.3);
+            margin-bottom: 20px;
+            box-shadow: 0 0 10px rgba(255, 215, 0, 0.2);
+        }
+
+        .menu-item {
+            background: transparent;
+            border: none;
+            color: var(--gold-glow);
+            font-size: 13px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: 0.3s;
+            text-shadow: 0 0 5px var(--gold-glow);
+        }
+
+        .menu-item:active {
+            transform: scale(0.9);
+        }
+
+        /* Bo'limlar */
+        .section {
+            display: none;
+            animation: fadeIn 0.4s ease-in-out;
+        }
+
+        .section.active {
+            display: block;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        h2 {
+            color: var(--gold-glow);
+            text-shadow: 0 0 8px var(--gold-glow);
+            margin-bottom: 15px;
+            font-size: 20px;
+        }
+
+        /* Oylik to'lov kartochkalari */
+        .pricing-container {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        .price-card {
+            background: rgba(255, 7, 58, 0.08);
+            border: 2px solid var(--red-glow);
+            padding: 15px;
+            border-radius: 12px;
+            text-align: center;
+            box-shadow: 0 0 12px var(--red-glow);
+            transition: 0.3s;
+        }
+
+        .price-card:active {
+            transform: scale(0.97);
+        }
+
+        .price-card h3 {
+            color: var(--red-glow);
+            text-shadow: 0 0 8px var(--red-glow);
+            margin-bottom: 5px;
+        }
+
+        .pay-btn {
+            background: var(--red-glow);
+            color: white;
+            border: none;
+            padding: 8px 15px;
+            border-radius: 8px;
+            font-weight: bold;
+            margin-top: 10px;
+            cursor: pointer;
+            box-shadow: 0 0 8px var(--red-glow);
+        }
+
+        /* Reklama joyi */
+        .ad-space {
+            background: rgba(0, 255, 102, 0.05);
+            border: 2px dashed var(--green-glow);
+            padding: 20px;
+            text-align: center;
+            border-radius: 12px;
+            color: var(--green-glow);
+            text-shadow: 0 0 6px var(--green-glow);
+            margin-bottom: 20px;
+            box-shadow: 0 0 10px rgba(0, 255, 102, 0.2);
+        }
+
+        /* O'yin qismi */
+        .game-box {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--gold-glow);
+            padding: 15px;
+            border-radius: 12px;
+            text-align: center;
+        }
+
+        .game-btn {
+            background: var(--gold-glow);
+            color: #000;
+            border: none;
+            padding: 10px 20px;
+            font-weight: bold;
+            border-radius: 8px;
+            cursor: pointer;
+            margin-top: 10px;
+            box-shadow: 0 0 10px var(--gold-glow);
+        }
+
+        /* Obuna ogohlantirish modali */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.85);
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+
+        .modal-content {
+            background: var(--bg-dark);
+            border: 2px solid var(--red-glow);
+            padding: 20px;
+            border-radius: 15px;
+            text-align: center;
+            width: 85%;
+            box-shadow: 0 0 20px var(--red-glow);
+        }
+
+        .modal-content h3 {
+            color: var(--red-glow);
+            text-shadow: 0 0 8px var(--red-glow);
+            margin-bottom: 10px;
+        }
+
+        /* Admin Panel Tugmasi (Burchakda) */
+        .admin-trigger {
+            position: fixed;
+            bottom: 15px;
+            right: 15px;
+            background: var(--gold-glow);
+            color: #000;
+            border: none;
+            width: 45px; height: 45px;
+            border-radius: 50%;
+            font-weight: bold;
+            font-size: 18px;
+            cursor: pointer;
+            box-shadow: 0 0 15px var(--gold-glow);
+            z-index: 500;
+        }
+
+        /* Admin Panel Modal */
+        #adminPanel {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: var(--bg-dark);
+            z-index: 2000;
+            padding: 20px;
+            overflow-y: auto;
+        }
+
+        .admin-input {
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+            background: rgba(255,255,255,0.1);
+            border: 1px solid var(--gold-glow);
+            color: white;
+            border-radius: 8px;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="top-menu">
+        <button class="menu-item" onclick="switchSection('home')">1. Bosh menyu</button>
+        <button class="menu-item" onclick="switchSection('favorites')">2. Sevimlilar</button>
+        <button class="menu-item" onclick="switchSection('stats')">3. Statistika</button>
+        <button class="menu-item" onclick="switchSection('payment')">4. To'lov</button>
+        <button class="menu-item" onclick="switchSection('game')">5. O'yin</button>
+    </div>
+
+    <div id="home" class="section active">
+        <h2>Xush kelibsiz, Uzbekcha Animelar olamiga!</h2>
+        <p>Eng Sara animelar o'zbek tilida faqat bizda.</p>
+    </div>
+
+    <div id="favorites" class="section">
+        <h2>Sevimli Animelar</h2>
+        <p>Hozircha sevimli animelaringiz qo'shilmagan.</p>
+    </div>
+
+    <div id="stats" class="section">
+        <h2>Statistika</h2>
+        <p>Jami foydalanuvchilar: <b>1,420</b></p>
+        <p>Tarjima qilingan animelar: <b>85 ta</b></p>
+    </div>
+
+    <div id="payment" class="section">
+        <h2>Oylik va Haftalik To'lovlar</h2>
+        <div class="pricing-container">
+            <div class="price-card">
+                <h3>1 Haftalik Obuna</h3>
+                <p><b>10 000 so'm</b></p>
+                <button class="pay-btn" onclick="buySubscription()">Sotib olish</button>
+            </div>
+            <div class="price-card" style="border-color: var(--gold-glow); box-shadow: 0 0 12px var(--gold-glow);">
+                <h3 style="color: var(--gold-glow); text-shadow: 0 0 8px var(--gold-glow);">1 Oylik Obuna</h3>
+                <p><b>20 000 so'm</b></p>
+                <button class="pay-btn" style="background: var(--gold-glow); color: #000; box-shadow: 0 0 8px var(--gold-glow);" onclick="buySubscription()">Sotib olish</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="game" class="section">
+        <h2>Zerikmaslik uchun O'yin</h2>
+        <div class="game-box">
+            <p id="gameText">Tugmani bosing va omadfingizni sinang!</p>
+            <button class="game-btn" onclick="playGame()">Omadli raqamni topish</button>
+        </div>
+    </div>
+
+    <div class="ad-space" id="adContainer">
+        📢 Reklama joyi (Admin panel orqali o'zgartiriladi)
+    </div>
+
+    <button class="admin-trigger" onclick="openAdminLogin()">⚙️</button>
+
+    <div class="modal" id="subModal">
+        <div class="modal-content">
+            <h3>DIQQAT! OGOHLANTIRISH</h3>
+            <p style="margin: 15px 0;">Sizda faol obuna mavjud emas! Barcha animelardan cheklovlarsiz foydalanish uchun obuna sotib oling.</p>
+            <button class="pay-btn" onclick="closeModal()">Tushunarli</button>
+        </div>
+    </div>
+
+    <div id="adminPanel">
+        <h2>🔒 Admin Panel</h2>
+        <div id="loginBox">
+            <p>10 talik parolni kiriting:</p>
+            <input type="password" id="adminPassInput" class="admin-input" placeholder="Parol...">
+            <button class="pay-btn" onclick="checkAdminPassword()">Kirish</button>
+            <button class="pay-btn" style="background: gray; margin-left: 10px;" onclick="closeAdminPanel()">Chiqish</button>
+        </div>
+        <div id="adminDashboard" style="display: none;">
+            <p style="color: var(--green-glow); margin-bottom: 15px;">✅ Xush kelibsiz, Admin!</p>
+            <label>Reklama matnini o'zgartirish:</label>
+            <input type="text" id="adTextInput" class="admin-input" placeholder="Yangi reklama matni...">
+            <button class="pay-btn" onclick="updateAd()">Reklamani yangilash</button>
+            <hr style="margin: 20px 0; border-color: rgba(255,215,0,0.3);">
+            <button class="pay-btn" style="background: var(--red-glow);" onclick="closeAdminPanel()">Admin Dan Chiqish</button>
+        </div>
+    </div>
+
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.expand();
+
+        // Bo'limlarni almashtirish va effekt
+        function switchSection(sectionId) {
+            document.querySelectorAll('.section').forEach(sec => sec.classList.remove('active'));
+            document.getElementById(sectionId).classList.add('active');
+            if (navigator.vibrate) navigator.vibrate(30); // Bosilganda yengil vibratsiya effekti
+        }
+
+        // O'yin funksiyasi
+        function playGame() {
+            const randomNum = Math.floor(Math.random() * 10) + 1;
+            document.getElementById('gameText').innerText = `Sizning omadli raqamingiz: ${randomNum} 🎯`;
+            if (navigator.vibrate) navigator.vibrate(50);
+        }
+
+        // Obuna sotib olish simulatsiyasi
+        function buySubscription() {
+            alert("To'lov tizimiga yo'naltirilmoqda...");
+            localStorage.setItem('hasSubscription', 'true');
+            document.getElementById('subModal').style.display = 'none';
+        }
+
+        // Har 12 daqiqada obuna so'rash (agar sotib olmagan bo'lsa)
+        let hasSub = localStorage.getItem('hasSubscription');
+        if (!hasSub) {
+            setInterval(() => {
+                document.getElementById('subModal').style.display = 'flex';
+                if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
+            }, 12 * 60 * 1000); // 12 daqiqa
+        }
+
+        function closeModal() {
+            document.getElementById('subModal').style.display = 'none';
+        }
+
+        // Admin Panel Logic
+        const ADMIN_SECRET = "Bekjon0880"; // 10 talik parol
+
+        function openAdminLogin() {
+            document.getElementById('adminPanel').style.display = 'block';
+            document.getElementById('loginBox').style.display = 'block';
+            document.getElementById('adminDashboard').style.display = 'none';
+            document.getElementById('adminPassInput').value = '';
+        }
+
+        function checkAdminPassword() {
+            const inputVal = document.getElementById('adminPassInput').value;
+            if (inputVal === ADMIN_SECRET) {
+                document.getElementById('loginBox').style.display = 'none';
+                document.getElementById('adminDashboard').style.display = 'block';
+            } else {
+                alert("❌ Parol noto'g'ri! Qabul qilinmadi.");
+            }
+        }
+
+        function closeAdminPanel() {
+            document.getElementById('adminPanel').style.display = 'none';
+        }
+
+        function updateAd() {
+            const newText = document.getElementById('adTextInput').value;
+            if (newText.trim() !== "") {
+                document.getElementById('adContainer').innerText = newText;
+                alert("✅ Reklama muvaffaqiyatli o'zgartirildi!");
+            }
+        }
+    </script>
+</body>
+</html>
