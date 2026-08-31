@@ -287,6 +287,27 @@ def api_favorites():
     return jsonify({"items": [{"id": i, "name": n, "genre": g or ""} for i, n, g in favs]})
  
  
+@web_app.route("/api/stats")
+def api_stats():
+    user_id = get_verified_user_id(request)
+    if not user_id:
+        return jsonify({"error": "unauthorized"}), 401
+ 
+    session = Session()
+    try:
+        users_count = session.query(User).count()
+        anime_count = session.query(Anime).count()
+        episodes_count = session.query(Episode).count()
+    finally:
+        Session.remove()
+ 
+    return jsonify({
+        "users_count": users_count,
+        "anime_count": anime_count,
+        "episodes_count": episodes_count,
+    })
+ 
+ 
 WEBAPP_DIR = Path(__file__).resolve().parent / "webapp"
  
  
@@ -2868,3 +2889,4 @@ def main():
  
 if __name__ == "__main__":
     main()
+ 
