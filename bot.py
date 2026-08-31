@@ -1,14 +1,17 @@
+
 import html
 import logging
 import os
+import hashlib
+import hmac
+import json
 from pathlib import Path
 from threading import Thread
-
+from urllib.parse import parse_qsl
+ 
 from dotenv import load_dotenv
-from flask import Flask
-from flask import send_from_directory
-
-
+from flask import Flask, send_from_directory, request, jsonify
+ 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -19,7 +22,7 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
-
+ 
 from sqlalchemy import (
     create_engine,
     Column,
@@ -30,39 +33,39 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from sqlalchemy.orm import declarative_base, sessionmaker, scoped_session
-
-
+ 
+ 
 # ============================================================
 # 1. ENVIRONMENT
 # ============================================================
-
+ 
 env_path = Path(__file__).resolve().parent / ".env"
 load_dotenv(dotenv_path=env_path)
-
+ 
 TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
     raise RuntimeError(
         "BOT_TOKEN topilmadi! .env yoki hosting Environment Variables "
         "ichiga BOT_TOKEN ni kiriting."
     )
-
+ 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///anime.db").strip()
-
+ 
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
-
+ 
 ADMIN_ID_RAW = os.getenv("ADMIN_ID", "").strip()
 if not ADMIN_ID_RAW:
     raise RuntimeError(
         "ADMIN_ID topilmadi! .env yoki hosting Environment Variables "
         "ichiga ADMIN_ID ni kiriting."
     )
-
+ 
 try:
     ADMIN_ID = int(ADMIN_ID_RAW)
 except ValueError:
     raise RuntimeError("ADMIN_ID faqat raqam bo'lishi kerak.")
-
+ 
 REQUIRED_CHANNELS = [
     channel.strip()
     for channel in os.getenv(
@@ -70,52 +73,233 @@ REQUIRED_CHANNELS = [
     ).split(",")
     if channel.strip()
 ]
-
+ 
 PAGE_SIZE = 5
 EPISODES_PER_PAGE = 5
-
-
+ 
+ 
 # ============================================================
 # 2. LOGGING
 # ============================================================
-
+ 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
-
+ 
 logger = logging.getLogger(__name__)
-
-
+ 
+ 
 # ============================================================
 # 3. FLASK WEB SERVER
 # ============================================================
-
+ 
 web_app = Flask(__name__)
-
-
+ 
+ 
 @web_app.route("/")
 def home():
     return "🤖 Bot muvaffaqiyatli ishlayapti!"
-
-
+ 
+ 
 @web_app.route("/health")
 def health():
     return "OK"
-
+ 
+ 
+# ---- Mini App: Telegram initData tekshiruvi ----
+ 
+def validate_init_data(init_data: str, bot_token: str):
+    """Mini App'dan kelgan ma'lumot imzosini tekshiradi.
+    Bu bo'lmasa, xohlagan kishi boshqa foydalanuvchi nomidan so'rov yubora oladi."""
+    if not init_data:
+        return None
+    try:
+        parsed = dict(parse_qsl(init_data, strict_parsing=True))
+    except ValueError:
+        return None
+ 
+    received_hash = parsed.pop("hash", None)
+    if not received_hash:
+        return None
+ 
+    data_check_string = "\n".join(f"{k}={v}" for k, v in sorted(parsed.items()))
+    secret_key = hmac.new(b"WebAppData", bot_token.encode(), hashlib.sha256).digest()
+    calculated_hash = hmac.new(secret_key, data_check_string.encode(), hashlib.sha256).hexdigest()
+ 
+    if not hmac.compare_digest(calculated_hash, received_hash):
+        return None
+    return parsed
+ 
+ 
+def get_verified_user_id(req):
+    """So'rov header'idan Telegram user_id'sini xavfsiz oladi."""
+    init_data = req.headers.get("X-Telegram-Init-Data", "")
+    parsed = validate_init_data(init_data, TOKEN)
+    if not parsed:
+        return None
+    user_json = parsed.get("user")
+    if not user_json:
+        return None
+    try:
+        user = json.loads(user_json)
+        return int(user.get("id"))
+    except (ValueError, TypeError, KeyError):
+        return None
+ 
+ 
+API_PAGE_SIZE = 20
+ 
+ 
+# ---- Mini App: API endpointlari ----
+ 
+@web_app.route("/api/anime")
+def api_anime_list():
+    user_id = get_verified_user_id(request)
+    if not user_id:
+        return jsonify({"error": "unauthorized"}), 401
+ 
+    search = request.args.get("search", "").strip()
+    try:
+        page = int(request.args.get("page", 0) or 0)
+    except ValueError:
+        page = 0
+ 
+    session = Session()
+    try:
+        q = session.query(Anime)
+        if search:
+            if search.isdigit():
+                q = q.filter(Anime.id == int(search))
+            else:
+                q = q.filter(Anime.name.ilike(f"%{search}%"))
+        q = q.order_by(Anime.name.asc())
+        total = q.count()
+        items = q.offset(page * API_PAGE_SIZE).limit(API_PAGE_SIZE).all()
+ 
+        favorite_ids = {
+            fav_anime_id for (fav_anime_id,) in
+            session.query(Favorite.anime_id).filter_by(user_id=user_id).all()
+        }
+ 
+        result = []
+        for a in items:
+            ep_count = session.query(Episode).filter_by(anime_id=a.id).count()
+            result.append({
+                "id": a.id,
+                "name": a.name,
+                "genre": a.genre or "",
+                "description": a.description or "",
+                "episode_count": ep_count,
+                "is_favorite": a.id in favorite_ids,
+            })
+    finally:
+        Session.remove()
+ 
+    return jsonify({"items": result, "total": total, "page": page, "page_size": API_PAGE_SIZE})
+ 
+ 
+@web_app.route("/api/anime/<int:anime_id>")
+def api_anime_detail(anime_id):
+    user_id = get_verified_user_id(request)
+    if not user_id:
+        return jsonify({"error": "unauthorized"}), 401
+ 
+    session = Session()
+    try:
+        anime = session.query(Anime).filter_by(id=anime_id).first()
+        if not anime:
+            return jsonify({"error": "not_found"}), 404
+ 
+        episodes = [
+            ep_num for (ep_num,) in
+            session.query(Episode.episode_number)
+            .filter_by(anime_id=anime_id)
+            .order_by(Episode.episode_number.asc())
+            .all()
+        ]
+ 
+        is_fav = session.query(Favorite).filter_by(user_id=user_id, anime_id=anime_id).first() is not None
+    finally:
+        Session.remove()
+ 
+    return jsonify({
+        "id": anime.id,
+        "name": anime.name,
+        "genre": anime.genre or "",
+        "description": anime.description or "",
+        "episodes": episodes,
+        "is_favorite": is_fav,
+    })
+ 
+ 
+@web_app.route("/api/favorite/toggle", methods=["POST"])
+def api_favorite_toggle():
+    user_id = get_verified_user_id(request)
+    if not user_id:
+        return jsonify({"error": "unauthorized"}), 401
+ 
+    data = request.get_json(silent=True) or {}
+    try:
+        anime_id = int(data.get("anime_id"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "bad_request"}), 400
+ 
+    session = Session()
+    try:
+        existing = session.query(Favorite).filter_by(user_id=user_id, anime_id=anime_id).first()
+        if existing:
+            session.delete(existing)
+            session.commit()
+            is_fav = False
+        else:
+            session.add(Favorite(user_id=user_id, anime_id=anime_id))
+            session.commit()
+            is_fav = True
+    except Exception:
+        session.rollback()
+        logger.exception("Favorite toggle xatosi (API)")
+        return jsonify({"error": "server_error"}), 500
+    finally:
+        Session.remove()
+ 
+    return jsonify({"is_favorite": is_fav})
+ 
+ 
+@web_app.route("/api/favorites")
+def api_favorites():
+    user_id = get_verified_user_id(request)
+    if not user_id:
+        return jsonify({"error": "unauthorized"}), 401
+ 
+    session = Session()
+    try:
+        favs = (
+            session.query(Anime.id, Anime.name, Anime.genre)
+            .join(Favorite, Favorite.anime_id == Anime.id)
+            .filter(Favorite.user_id == user_id)
+            .order_by(Anime.name.asc())
+            .all()
+        )
+    finally:
+        Session.remove()
+ 
+    return jsonify({"items": [{"id": i, "name": n, "genre": g or ""} for i, n, g in favs]})
+ 
+ 
 WEBAPP_DIR = Path(__file__).resolve().parent / "webapp"
-
-
+ 
+ 
 @web_app.route("/webapp/")
 def webapp_index():
     return send_from_directory(WEBAPP_DIR, "index.html")
-
-
+ 
+ 
 @web_app.route("/webapp/<path:filename>")
 def webapp_static(filename):
     return send_from_directory(WEBAPP_DIR, filename)
-
-
+ 
+ 
 def run_web_server():
     port = int(os.environ.get("PORT", "8080"))
     web_app.run(
@@ -124,12 +308,12 @@ def run_web_server():
         debug=False,
         use_reloader=False,
     )
-
-
+ 
+ 
 # ============================================================
 # 4. DATABASE
 # ============================================================
-
+ 
 if DATABASE_URL.startswith("sqlite"):
     engine = create_engine(
         DATABASE_URL,
@@ -142,33 +326,33 @@ else:
         pool_pre_ping=True,
         pool_recycle=300,
     )
-
+ 
 SessionFactory = sessionmaker(
     bind=engine,
     expire_on_commit=False,
 )
-
+ 
 Session = scoped_session(SessionFactory)
 Base = declarative_base()
-
-
+ 
+ 
 class Anime(Base):
     __tablename__ = "anime"
-
+ 
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String, nullable=False)
     description = Column(String, nullable=True)
     genre = Column(String, nullable=True)
-
-
+ 
+ 
 class Episode(Base):
     __tablename__ = "episodes"
-
+ 
     id = Column(Integer, primary_key=True, autoincrement=True)
     anime_id = Column(Integer, ForeignKey("anime.id"), nullable=False)
     episode_number = Column(Integer, nullable=False)
     file_id = Column(String, nullable=False)
-
+ 
     __table_args__ = (
         UniqueConstraint(
             "anime_id",
@@ -176,26 +360,26 @@ class Episode(Base):
             name="uq_anime_episode",
         ),
     )
-
-
+ 
+ 
 class User(Base):
     __tablename__ = "users"
-
+ 
     id = Column(Integer, primary_key=True, autoincrement=True)
     telegram_id = Column(BigInteger, unique=True, nullable=False)
     username = Column(String, nullable=True)
     first_name = Column(String, nullable=True)
     last_anime_id = Column(Integer, nullable=True)
     last_episode_num = Column(Integer, nullable=True)
-
-
+ 
+ 
 class Favorite(Base):
     __tablename__ = "favorites"
-
+ 
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(Integer, nullable=False)
     anime_id = Column(Integer, nullable=False)
-
+ 
     __table_args__ = (
         UniqueConstraint(
             "user_id",
@@ -203,29 +387,29 @@ class Favorite(Base):
             name="uq_user_anime_favorite",
         ),
     )
-
-
+ 
+ 
 def init_database():
     Base.metadata.create_all(engine)
     logger.info("Database tayyor.")
-
-
+ 
+ 
 def save_user(user_data):
     if not user_data:
         return
-
+ 
     session = Session()
-
+ 
     try:
         db_user = (
             session.query(User)
             .filter_by(telegram_id=user_data.id)
             .first()
         )
-
+ 
         username = user_data.username
         first_name = user_data.first_name
-
+ 
         if db_user is None:
             db_user = User(
                 telegram_id=user_data.id,
@@ -236,89 +420,89 @@ def save_user(user_data):
         else:
             db_user.username = username
             db_user.first_name = first_name
-
+ 
         session.commit()
-
+ 
     except Exception as e:
         session.rollback()
         logger.exception("Foydalanuvchini saqlashda xatolik: %s", e)
-
+ 
     finally:
         Session.remove()
-
-
+ 
+ 
 # ============================================================
 # 5. CONVERSATION STATES
 # ============================================================
-
+ 
 (
     ADD_ANIME_NAME,
     ADD_ANIME_GENRE,
     ADD_ANIME_DESCRIPTION,
 ) = range(3)
-
+ 
 ADD_EPISODE_NUMBER, ADD_EPISODE_VIDEO = range(3, 5)
-
+ 
 BROADCAST_MESSAGE = 5
-
-
+ 
+ 
 # ============================================================
 # 6. COMMON HELPERS
 # ============================================================
-
+ 
 def is_admin(user_id: int) -> bool:
     return user_id == ADMIN_ID
-
-
+ 
+ 
 def channel_url(channel: str) -> str:
     channel = channel.strip()
-
+ 
     if channel.startswith("https://t.me/"):
         return channel
-
+ 
     if channel.startswith("@"):
         return f"https://t.me/{channel[1:]}"
-
+ 
     return f"https://t.me/{channel}"
-
-
+ 
+ 
 def channel_chat_id(channel: str):
     channel = channel.strip()
-
+ 
     if channel.startswith("https://t.me/"):
         username = channel.rstrip("/").split("/")[-1]
         return f"@{username}"
-
+ 
     if channel.startswith("@"):
         return channel
-
+ 
     return f"@{channel}"
-
-
+ 
+ 
 async def check_sub(
     user_id: int,
     context: ContextTypes.DEFAULT_TYPE,
 ) -> bool:
     if is_admin(user_id):
         return True
-
+ 
     if not REQUIRED_CHANNELS:
         return True
-
+ 
     for channel in REQUIRED_CHANNELS:
         try:
             member = await context.bot.get_chat_member(
                 chat_id=channel_chat_id(channel),
                 user_id=user_id,
             )
-
+ 
             if member.status not in (
                 "member",
                 "administrator",
                 "creator",
             ):
                 return False
-
+ 
         except Exception as e:
             logger.error(
                 "Kanal obunasini tekshirishda xatolik (%s). "
@@ -327,23 +511,23 @@ async def check_sub(
                 e,
             )
             return False
-
+ 
     return True
-
-
+ 
+ 
 async def send_sub_request(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
     keyboard = []
-
+ 
     for channel in REQUIRED_CHANNELS:
         display_channel = (
             channel
             if channel.startswith("@")
             else f"@{channel}"
         )
-
+ 
         keyboard.append(
             [
                 InlineKeyboardButton(
@@ -352,7 +536,7 @@ async def send_sub_request(
                 )
             ]
         )
-
+ 
     keyboard.append(
         [
             InlineKeyboardButton(
@@ -361,18 +545,18 @@ async def send_sub_request(
             )
         ]
     )
-
+ 
     text = (
         "🚨 <b>DIQQAT!</b>\n\n"
         "Botdan foydalanish uchun quyidagi barcha "
         "kanallarga a'zo bo'ling."
     )
-
+ 
     markup = InlineKeyboardMarkup(keyboard)
-
+ 
     if update.callback_query:
         query = update.callback_query
-
+ 
         try:
             await query.edit_message_text(
                 text,
@@ -392,8 +576,8 @@ async def send_sub_request(
             reply_markup=markup,
             parse_mode="HTML",
         )
-
-
+ 
+ 
 def main_keyboard():
     return InlineKeyboardMarkup(
         [
@@ -411,8 +595,8 @@ def main_keyboard():
             ],
         ]
     )
-
-
+ 
+ 
 def admin_keyboard():
     return InlineKeyboardMarkup(
         [
@@ -460,32 +644,32 @@ def admin_keyboard():
             ],
         ]
     )
-
-
+ 
+ 
 # ============================================================
 # 7. USER START / SEARCH
 # ============================================================
-
+ 
 async def start(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
     try:
         user = update.effective_user
-
+ 
         if not user:
             return
-
+ 
         save_user(user)
-
+ 
         if not await check_sub(user.id, context):
             await send_sub_request(update, context)
             return
-
+ 
         first_name_clean = html.escape(
             user.first_name or "Foydalanuvchi"
         )
-
+ 
         text = (
             f"✨ 🌟 <b>Salom, {first_name_clean}!</b> 🌟 ✨\n\n"
             "🎌 <b>O'zbekistondagi anime botga xush kelibsiz!</b> "
@@ -495,11 +679,11 @@ async def start(
             "📚 <i>Katalog orqali anime toping</i>\n"
             "⭐️ <i>Sevimli animelaringizni saqlang</i>"
         )
-
+ 
         if update.callback_query:
             query = update.callback_query
             await query.answer()
-
+ 
             try:
                 await query.edit_message_text(
                     text,
@@ -519,38 +703,38 @@ async def start(
                 reply_markup=main_keyboard(),
                 parse_mode="HTML",
             )
-
+ 
     except Exception as e:
         logger.exception("START xatosi: %s", e)
-
-
+ 
+ 
 async def search_anime(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
     try:
         user = update.effective_user
-
+ 
         if not user or not update.message:
             return
-
+ 
         save_user(user)
-
+ 
         if not await check_sub(user.id, context):
             await send_sub_request(update, context)
             return
-
+ 
         query_text = update.message.text.strip()
-
+ 
         if not query_text:
             return
-
+ 
         session = Session()
-
+ 
         try:
             if query_text.isdigit():
                 anime_id = int(query_text)
-
+ 
                 results = (
                     session.query(Anime.id, Anime.name)
                     .filter(Anime.id == anime_id)
@@ -568,10 +752,10 @@ async def search_anime(
                     .limit(10)
                     .all()
                 )
-
+ 
         finally:
             Session.remove()
-
+ 
         if not results:
             await update.message.reply_text(
                 "😔 <b>Kechirasiz, anime topilmadi.</b>\n\n"
@@ -579,9 +763,9 @@ async def search_anime(
                 parse_mode="HTML",
             )
             return
-
+ 
         keyboard = []
-
+ 
         for anime_id, name in results:
             keyboard.append(
                 [
@@ -591,7 +775,7 @@ async def search_anime(
                     )
                 ]
             )
-
+ 
         keyboard.append(
             [
                 InlineKeyboardButton(
@@ -600,44 +784,44 @@ async def search_anime(
                 )
             ]
         )
-
+ 
         await update.message.reply_text(
             "🔎 <b>Qidiruv natijalari:</b> 🎬",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="HTML",
         )
-
+ 
     except Exception as e:
         logger.exception("SEARCH xatosi: %s", e)
-
-
+ 
+ 
 # ============================================================
 # 8. ADMIN PANEL
 # ============================================================
-
+ 
 async def admin(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
     if not update.effective_user:
         return
-
+ 
     if not is_admin(update.effective_user.id):
         if update.message:
             await update.message.reply_text(
                 "🚫 Kechirasiz, siz admin emassiz!"
             )
         return
-
+ 
     await send_admin_panel(update)
-
-
+ 
+ 
 async def send_admin_panel(update: Update):
     text = (
         "⚙️ <b>ADMINISTRATOR PANELI</b> 🛠\n\n"
         "👇 Kerakli bo'limni tanlang:"
     )
-
+ 
     if update.callback_query:
         query = update.callback_query
         await query.edit_message_text(
@@ -651,24 +835,24 @@ async def send_admin_panel(update: Update):
             reply_markup=admin_keyboard(),
             parse_mode="HTML",
         )
-
-
+ 
+ 
 # ============================================================
 # 9. ADMIN DELETE
 # ============================================================
-
+ 
 async def delete_anime_list(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
     query = update.callback_query
     await query.answer()
-
+ 
     if not is_admin(query.from_user.id):
         return
-
+ 
     session = Session()
-
+ 
     try:
         anime_list = (
             session.query(Anime.id, Anime.name)
@@ -677,7 +861,7 @@ async def delete_anime_list(
         )
     finally:
         Session.remove()
-
+ 
     if not anime_list:
         await query.edit_message_text(
             "❌ O'chirish uchun anime yo'q.",
@@ -693,9 +877,9 @@ async def delete_anime_list(
             ),
         )
         return
-
+ 
     keyboard = []
-
+ 
     for anime_id, name in anime_list:
         keyboard.append(
             [
@@ -705,7 +889,7 @@ async def delete_anime_list(
                 )
             ]
         )
-
+ 
     keyboard.append(
         [
             InlineKeyboardButton(
@@ -714,60 +898,60 @@ async def delete_anime_list(
             )
         ]
     )
-
+ 
     await query.edit_message_text(
         "🗑 <b>O'chirmoqchi bo'lgan animeni tanlang:</b>",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML",
     )
-
-
+ 
+ 
 async def process_delete_anime(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
     query = update.callback_query
     await query.answer()
-
+ 
     if not is_admin(query.from_user.id):
         return
-
+ 
     try:
         anime_id = int(query.data.split("_")[-1])
     except (ValueError, IndexError):
         await query.edit_message_text("❌ Noto'g'ri anime ID.")
         return
-
+ 
     session = Session()
-
+ 
     try:
         anime = (
             session.query(Anime)
             .filter_by(id=anime_id)
             .first()
         )
-
+ 
         if not anime:
             text = "❌ Anime topilmadi."
         else:
             anime_name = anime.name
-
+ 
             session.query(Episode).filter_by(
                 anime_id=anime_id
             ).delete(synchronize_session=False)
-
+ 
             session.query(Favorite).filter_by(
                 anime_id=anime_id
             ).delete(synchronize_session=False)
-
+ 
             session.delete(anime)
             session.commit()
-
+ 
             text = (
                 f"✅ <b>{html.escape(anime_name)}</b>\n\n"
                 "Anime va uning barcha qismlari o'chirildi."
             )
-
+ 
     except Exception as e:
         session.rollback()
         logger.exception(
@@ -775,10 +959,10 @@ async def process_delete_anime(
             e,
         )
         text = "❌ Anime o'chirishda xatolik yuz berdi."
-
+ 
     finally:
         Session.remove()
-
+ 
     await query.edit_message_text(
         text,
         reply_markup=InlineKeyboardMarkup(
@@ -793,24 +977,24 @@ async def process_delete_anime(
         ),
         parse_mode="HTML",
     )
-
-
+ 
+ 
 # ============================================================
 # 10. ADMIN ANIME LIST / STATS
 # ============================================================
-
+ 
 async def admin_anime_list(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
     query = update.callback_query
     await query.answer()
-
+ 
     if not is_admin(query.from_user.id):
         return
-
+ 
     session = Session()
-
+ 
     try:
         anime_list = (
             session.query(Anime.id, Anime.name)
@@ -819,7 +1003,7 @@ async def admin_anime_list(
         )
     finally:
         Session.remove()
-
+ 
     if not anime_list:
         text = "📋 Hozircha botda animelar yo'q."
     else:
@@ -827,15 +1011,15 @@ async def admin_anime_list(
             "📋 <b>BOTDAGI ANIMELAR:</b> 🎌",
             "",
         ]
-
+ 
         for anime_id, name in anime_list:
             lines.append(
                 f"🆔 <code>{anime_id}</code> | "
                 f"🎌 <b>{html.escape(name)}</b>"
             )
-
+ 
         text = "\n".join(lines)
-
+ 
     await query.edit_message_text(
         text,
         reply_markup=InlineKeyboardMarkup(
@@ -850,34 +1034,34 @@ async def admin_anime_list(
         ),
         parse_mode="HTML",
     )
-
-
+ 
+ 
 async def admin_stats(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
     query = update.callback_query
     await query.answer()
-
+ 
     if not is_admin(query.from_user.id):
         return
-
+ 
     session = Session()
-
+ 
     try:
         users_count = session.query(User).count()
         anime_count = session.query(Anime).count()
         episodes_count = session.query(Episode).count()
     finally:
         Session.remove()
-
+ 
     text = (
         "📊 <b>BOT STATISTIKASI</b> 📈\n\n"
         f"👥 Foydalanuvchilar: <b>{users_count}</b> ta\n"
         f"🎌 Animelar: <b>{anime_count}</b> ta\n"
         f"🍿 Qismlar: <b>{episodes_count}</b> ta"
     )
-
+ 
     await query.edit_message_text(
         text,
         reply_markup=InlineKeyboardMarkup(
@@ -892,22 +1076,22 @@ async def admin_stats(
         ),
         parse_mode="HTML",
     )
-
-
+ 
+ 
 # ============================================================
 # 11. BROADCAST
 # ============================================================
-
+ 
 async def broadcast_start(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
     query = update.callback_query
     await query.answer()
-
+ 
     if not is_admin(query.from_user.id):
         return ConversationHandler.END
-
+ 
     await query.edit_message_text(
         "📢 <b>XABAR TARQATISH</b> 🚀\n\n"
         "Barcha foydalanuvchilarga yubormoqchi "
@@ -915,38 +1099,38 @@ async def broadcast_start(
         "Bekor qilish: /cancel",
         parse_mode="HTML",
     )
-
+ 
     return BROADCAST_MESSAGE
-
-
+ 
+ 
 async def broadcast_send(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
     if not update.effective_user or not update.message:
         return ConversationHandler.END
-
+ 
     if not is_admin(update.effective_user.id):
         return ConversationHandler.END
-
+ 
     message_text = update.message.text.strip()
-
+ 
     if not message_text:
         await update.message.reply_text(
             "❌ Xabar bo'sh bo'lishi mumkin emas."
         )
         return BROADCAST_MESSAGE
-
+ 
     session = Session()
-
+ 
     try:
         users = session.query(User.telegram_id).all()
     finally:
         Session.remove()
-
+ 
     success_count = 0
     failed_count = 0
-
+ 
     for (user_id,) in users:
         try:
             await context.bot.send_message(
@@ -961,143 +1145,143 @@ async def broadcast_send(
                 user_id,
                 e,
             )
-
+ 
     await update.message.reply_text(
         "🚀 <b>Broadcast tugadi!</b>\n\n"
         f"✅ Yuborildi: <b>{success_count}</b>\n"
         f"❌ Yuborilmadi: <b>{failed_count}</b>",
         parse_mode="HTML",
     )
-
+ 
     return ConversationHandler.END
-
-
+ 
+ 
 # ============================================================
 # 12. ADD ANIME
 # ============================================================
-
+ 
 async def add_anime_start(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
     query = update.callback_query
     await query.answer()
-
+ 
     if not is_admin(query.from_user.id):
         return ConversationHandler.END
-
+ 
     context.user_data.clear()
-
+ 
     await query.edit_message_text(
         "➕ <b>YANGI ANIME QO'SHISH</b> 🎌\n\n"
         "Anime nomini yozing:\n\n"
         "Bekor qilish: /cancel",
         parse_mode="HTML",
     )
-
+ 
     return ADD_ANIME_NAME
-
-
+ 
+ 
 async def add_anime_name(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
     if not update.message:
         return ADD_ANIME_NAME
-
+ 
     name = update.message.text.strip()
-
+ 
     if not name:
         await update.message.reply_text(
             "❌ Anime nomi bo'sh bo'lmasin."
         )
         return ADD_ANIME_NAME
-
+ 
     context.user_data["anime_name"] = name
-
+ 
     await update.message.reply_text(
         "🎭 <b>Anime janrini kiriting:</b>",
         parse_mode="HTML",
     )
-
+ 
     return ADD_ANIME_GENRE
-
-
+ 
+ 
 async def add_anime_genre(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
     if not update.message:
         return ADD_ANIME_GENRE
-
+ 
     genre = update.message.text.strip()
-
+ 
     if not genre:
         await update.message.reply_text(
             "❌ Janr bo'sh bo'lmasin."
         )
         return ADD_ANIME_GENRE
-
+ 
     context.user_data["anime_genre"] = genre
-
+ 
     await update.message.reply_text(
         "📝 <b>Anime haqida qisqacha tavsif kiriting:</b>",
         parse_mode="HTML",
     )
-
+ 
     return ADD_ANIME_DESCRIPTION
-
-
+ 
+ 
 async def add_anime_description(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
     if not update.message:
         return ADD_ANIME_DESCRIPTION
-
+ 
     name = context.user_data.get("anime_name")
     genre = context.user_data.get("anime_genre")
     description = update.message.text.strip()
-
+ 
     if not name or not genre:
         await update.message.reply_text(
             "❌ Seans ma'lumotlari topilmadi. /admin orqali qayta boshlang."
         )
         context.user_data.clear()
         return ConversationHandler.END
-
+ 
     if not description:
         await update.message.reply_text(
             "❌ Tavsif bo'sh bo'lmasin."
         )
         return ADD_ANIME_DESCRIPTION
-
+ 
     session = Session()
     success = False
-
+ 
     try:
         new_anime = Anime(
             name=name,
             genre=genre,
             description=description,
         )
-
+ 
         session.add(new_anime)
         session.commit()
         success = True
-
+ 
     except Exception as e:
         session.rollback()
         logger.exception(
             "Anime qo'shishda xatolik: %s",
             e,
         )
-
+ 
     finally:
         Session.remove()
-
+ 
     context.user_data.clear()
-
+ 
     if success:
         await update.message.reply_text(
             "🎉 <b>ANIME MUVAFFAQIYATLI QO'SHILDI!</b> 🎌\n\n"
@@ -1109,26 +1293,26 @@ async def add_anime_description(
         await update.message.reply_text(
             "❌ Anime bazaga saqlanmadi. Loglarni tekshiring."
         )
-
+ 
     return ConversationHandler.END
-
-
+ 
+ 
 # ============================================================
 # 13. ADD EPISODE
 # ============================================================
-
+ 
 async def add_episode_start(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
     query = update.callback_query
     await query.answer()
-
+ 
     if not is_admin(query.from_user.id):
         return ConversationHandler.END
-
+ 
     session = Session()
-
+ 
     try:
         anime_list = (
             session.query(Anime.id, Anime.name)
@@ -1137,7 +1321,7 @@ async def add_episode_start(
         )
     finally:
         Session.remove()
-
+ 
     if not anime_list:
         await query.edit_message_text(
             "❌ Qism qo'shish uchun avval anime yarating.",
@@ -1153,9 +1337,9 @@ async def add_episode_start(
             ),
         )
         return ConversationHandler.END
-
+ 
     keyboard = []
-
+ 
     for anime_id, name in anime_list:
         keyboard.append(
             [
@@ -1165,7 +1349,7 @@ async def add_episode_start(
                 )
             ]
         )
-
+ 
     keyboard.append(
         [
             InlineKeyboardButton(
@@ -1174,66 +1358,66 @@ async def add_episode_start(
             )
         ]
     )
-
+ 
     await query.edit_message_text(
         "📺 <b>QISM QO'SHISH</b> 🎬\n\n"
         "Qaysi animega qism qo'shmoqchisiz?",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML",
     )
-
+ 
     return ADD_EPISODE_NUMBER
-
-
+ 
+ 
 async def choose_episode_anime(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
     query = update.callback_query
     await query.answer()
-
+ 
     if not is_admin(query.from_user.id):
         return ConversationHandler.END
-
+ 
     try:
         anime_id = int(query.data.split("_")[-1])
     except (ValueError, IndexError):
         await query.edit_message_text("❌ Noto'g'ri anime ID.")
         return ConversationHandler.END
-
+ 
     session = Session()
-
+ 
     try:
         anime = (
             session.query(Anime)
             .filter_by(id=anime_id)
             .first()
         )
-
+ 
         if anime is None:
             await query.edit_message_text(
                 "❌ Anime topilmadi."
             )
             return ConversationHandler.END
-
+ 
         anime_name = anime.name
-
+ 
         max_ep = (
             session.query(Episode.episode_number)
             .filter_by(anime_id=anime_id)
             .order_by(Episode.episode_number.desc())
             .first()
         )
-
+ 
         max_ep_num = max_ep[0] if max_ep else 0
         next_suggested = max_ep_num + 1
-
+ 
     finally:
         Session.remove()
-
+ 
     context.user_data["episode_anime_id"] = anime_id
     context.user_data["episode_anime_name"] = anime_name
-
+ 
     await query.edit_message_text(
         f"🎬 <b>Tanlangan anime:</b> "
         f"{html.escape(anime_name)}\n\n"
@@ -1242,86 +1426,86 @@ async def choose_episode_anime(
         "Bekor qilish: /cancel",
         parse_mode="HTML",
     )
-
+ 
     return ADD_EPISODE_NUMBER
-
-
+ 
+ 
 async def episode_number(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
     if not update.message:
         return ADD_EPISODE_NUMBER
-
+ 
     text = update.message.text.strip()
-
+ 
     if not text.isdigit() or int(text) <= 0:
         await update.message.reply_text(
             "❌ Iltimos, musbat raqam kiriting!"
         )
         return ADD_EPISODE_NUMBER
-
+ 
     ep_num = int(text)
     anime_id = context.user_data.get("episode_anime_id")
-
+ 
     if not anime_id:
         await update.message.reply_text(
             "❌ Anime tanlanmagan. /admin orqali qayta urinib ko'ring."
         )
         return ConversationHandler.END
-
+ 
     context.user_data["episode_number"] = ep_num
-
+ 
     await update.message.reply_text(
         "📹 <b>Endi ushbu qismning videosini yuboring:</b> 📲\n\n"
         "Bekor qilish: /cancel",
         parse_mode="HTML",
     )
-
+ 
     return ADD_EPISODE_VIDEO
-
-
+ 
+ 
 async def episode_video(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
     if not update.message:
         return ADD_EPISODE_VIDEO
-
+ 
     msg = update.message
-
+ 
     video = (
         msg.video
         or msg.document
         or msg.animation
         or msg.video_note
     )
-
+ 
     if not video:
         await msg.reply_text(
             "❌ Iltimos, video fayl yuboring!"
         )
         return ADD_EPISODE_VIDEO
-
+ 
     anime_id = context.user_data.get("episode_anime_id")
     ep_num = context.user_data.get("episode_number")
     anime_name = context.user_data.get(
         "episode_anime_name",
         "Anime",
     )
-
+ 
     if not anime_id or not ep_num:
         await msg.reply_text(
             "❌ Seans xatosi. /admin menyusidan qayta urinib ko'ring."
         )
         context.user_data.clear()
         return ConversationHandler.END
-
+ 
     video_file_id = video.file_id
-
+ 
     session = Session()
     success = False
-
+ 
     try:
         existing_ep = (
             session.query(Episode)
@@ -1331,7 +1515,7 @@ async def episode_video(
             )
             .first()
         )
-
+ 
         if existing_ep:
             existing_ep.file_id = video_file_id
         else:
@@ -1342,26 +1526,26 @@ async def episode_video(
                     file_id=video_file_id,
                 )
             )
-
+ 
         session.commit()
         success = True
-
+ 
     except Exception as e:
         session.rollback()
         logger.exception(
             "Epizod saqlashda xatolik: %s",
             e,
         )
-
+ 
     finally:
         Session.remove()
-
+ 
     if not success:
         await msg.reply_text(
             "❌ Video bazaga saqlanmadi."
         )
         return ConversationHandler.END
-
+ 
     keyboard = [
         [
             InlineKeyboardButton(
@@ -1384,7 +1568,7 @@ async def episode_video(
             )
         ],
     ]
-
+ 
     await msg.reply_text(
         f"🎉 <b>{ep_num}-QISM MUVAFFAQIYATLI SAQLANDI!</b> 🎬\n\n"
         f"🎌 Anime: <b>{html.escape(anime_name)}</b>\n"
@@ -1392,29 +1576,29 @@ async def episode_video(
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML",
     )
-
+ 
     context.user_data.clear()
     return ConversationHandler.END
-
-
+ 
+ 
 async def quick_add_next_start(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
     query = update.callback_query
     await query.answer()
-
+ 
     if not is_admin(query.from_user.id):
         return ConversationHandler.END
-
+ 
     parts = query.data.split("_")
-
+ 
     if len(parts) != 5:
         await query.edit_message_text(
             "❌ Noto'g'ri qism ma'lumoti."
         )
         return ConversationHandler.END
-
+ 
     try:
         anime_id = int(parts[3])
         next_ep = int(parts[4])
@@ -1423,59 +1607,59 @@ async def quick_add_next_start(
             "❌ Noto'g'ri qism ma'lumoti."
         )
         return ConversationHandler.END
-
+ 
     session = Session()
-
+ 
     try:
         anime = (
             session.query(Anime)
             .filter_by(id=anime_id)
             .first()
         )
-
+ 
         if anime is None:
             await query.edit_message_text(
                 "❌ Anime topilmadi."
             )
             return ConversationHandler.END
-
+ 
         anime_name = anime.name
-
+ 
     finally:
         Session.remove()
-
+ 
     context.user_data["episode_anime_id"] = anime_id
     context.user_data["episode_number"] = next_ep
     context.user_data["episode_anime_name"] = anime_name
-
+ 
     await query.edit_message_text(
         f"🎬 <b>Anime:</b> {html.escape(anime_name)}\n\n"
         f"📹 <b>{next_ep}-qism uchun video yuboring:</b> 📲\n\n"
         "Bekor qilish: /cancel",
         parse_mode="HTML",
     )
-
+ 
     return ADD_EPISODE_VIDEO
-
-
+ 
+ 
 # ============================================================
 # 14. USER ANIME CATALOG
 # ============================================================
-
+ 
 async def user_anime_list_paged(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
     page: int = 0,
 ):
     query = update.callback_query
-
+ 
     if query:
         await query.answer()
-
+ 
     page = max(0, page)
-
+ 
     session = Session()
-
+ 
     try:
         anime_list = (
             session.query(Anime.id, Anime.name)
@@ -1484,7 +1668,7 @@ async def user_anime_list_paged(
         )
     finally:
         Session.remove()
-
+ 
     if not anime_list:
         if query:
             await query.edit_message_text(
@@ -1501,26 +1685,26 @@ async def user_anime_list_paged(
                 ),
             )
         return
-
+ 
     total_items = len(anime_list)
-
+ 
     max_page = max(
         0,
         (total_items - 1) // PAGE_SIZE,
     )
-
+ 
     if page > max_page:
         page = max_page
-
+ 
     start_offset = page * PAGE_SIZE
     end_offset = start_offset + PAGE_SIZE
-
+ 
     current_items = anime_list[
         start_offset:end_offset
     ]
-
+ 
     keyboard = []
-
+ 
     for anime_id, name in current_items:
         keyboard.append(
             [
@@ -1530,9 +1714,9 @@ async def user_anime_list_paged(
                 )
             ]
         )
-
+ 
     nav_row = []
-
+ 
     if page > 0:
         nav_row.append(
             InlineKeyboardButton(
@@ -1542,7 +1726,7 @@ async def user_anime_list_paged(
                 ),
             )
         )
-
+ 
     if end_offset < total_items:
         nav_row.append(
             InlineKeyboardButton(
@@ -1552,10 +1736,10 @@ async def user_anime_list_paged(
                 ),
             )
         )
-
+ 
     if nav_row:
         keyboard.append(nav_row)
-
+ 
     keyboard.append(
         [
             InlineKeyboardButton(
@@ -1564,19 +1748,19 @@ async def user_anime_list_paged(
             )
         ]
     )
-
+ 
     await query.edit_message_text(
         f"📚 <b>ANIME KATALOGI</b>\n"
         f"Sahifa: <b>{page + 1}/{max_page + 1}</b>",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML",
     )
-
-
+ 
+ 
 # ============================================================
 # 15. ANIME DETAILS
 # ============================================================
-
+ 
 async def user_anime_details(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -1584,40 +1768,40 @@ async def user_anime_details(
 ):
     query = update.callback_query
     await query.answer()
-
+ 
     parts = query.data.split("_")
-
+ 
     if len(parts) < 3:
         await query.edit_message_text(
             "❌ Noto'g'ri anime ma'lumoti."
         )
         return
-
+ 
     try:
         anime_id = int(parts[2])
-
+ 
         if len(parts) > 3:
             ep_page = int(parts[3])
-
+ 
     except ValueError:
         await query.edit_message_text(
             "❌ Noto'g'ri anime ma'lumoti."
         )
         return
-
+ 
     ep_page = max(0, ep_page)
-
+ 
     user_id = query.from_user.id
-
+ 
     session = Session()
-
+ 
     try:
         anime = (
             session.query(Anime)
             .filter_by(id=anime_id)
             .first()
         )
-
+ 
         if anime is None:
             await query.edit_message_text(
                 "❌ Anime topilmadi.",
@@ -1633,14 +1817,14 @@ async def user_anime_details(
                 ),
             )
             return
-
+ 
         anime_name = anime.name
         anime_genre = anime.genre or "Noma'lum"
         anime_description = (
             anime.description
             or "Tavsif berilmagan."
         )
-
+ 
         episodes = [
             ep_num
             for (ep_num,) in (
@@ -1650,7 +1834,7 @@ async def user_anime_details(
                 .all()
             )
         ]
-
+ 
         is_fav = (
             session.query(Favorite)
             .filter_by(
@@ -1660,10 +1844,10 @@ async def user_anime_details(
             .first()
             is not None
         )
-
+ 
     finally:
         Session.remove()
-
+ 
     text = (
         f"🎌 <b>{html.escape(anime_name)}</b>\n"
         f"🆔 ID: <code>{anime_id}</code>\n\n"
@@ -1673,20 +1857,20 @@ async def user_anime_details(
         f"<i>{html.escape(anime_description)}</i>\n\n"
         "🍿 <b>Qismni tanlang:</b>"
     )
-
+ 
     keyboard = []
-
+ 
     total_episodes = len(episodes)
-
+ 
     start_idx = ep_page * EPISODES_PER_PAGE
     end_idx = start_idx + EPISODES_PER_PAGE
-
+ 
     current_episodes = episodes[
         start_idx:end_idx
     ]
-
+ 
     row = []
-
+ 
     for ep_num in current_episodes:
         row.append(
             InlineKeyboardButton(
@@ -1694,16 +1878,16 @@ async def user_anime_details(
                 callback_data=f"watch_{anime_id}_{ep_num}",
             )
         )
-
+ 
         if len(row) == 3:
             keyboard.append(row)
             row = []
-
+ 
     if row:
         keyboard.append(row)
-
+ 
     ep_nav = []
-
+ 
     if ep_page > 0:
         ep_nav.append(
             InlineKeyboardButton(
@@ -1713,7 +1897,7 @@ async def user_anime_details(
                 ),
             )
         )
-
+ 
     if end_idx < total_episodes:
         ep_nav.append(
             InlineKeyboardButton(
@@ -1723,17 +1907,17 @@ async def user_anime_details(
                 ),
             )
         )
-
+ 
     if ep_nav:
         keyboard.append(ep_nav)
-
+ 
     if is_fav:
         fav_text = "❌ Saralanganlardan chiqarish"
         fav_action = f"fav_remove_{anime_id}"
     else:
         fav_text = "⭐️ Saralanganlarga qo'shish"
         fav_action = f"fav_add_{anime_id}"
-
+ 
     keyboard.append(
         [
             InlineKeyboardButton(
@@ -1742,7 +1926,7 @@ async def user_anime_details(
             )
         ]
     )
-
+ 
     keyboard.append(
         [
             InlineKeyboardButton(
@@ -1751,7 +1935,7 @@ async def user_anime_details(
             )
         ]
     )
-
+ 
     keyboard.append(
         [
             InlineKeyboardButton(
@@ -1760,27 +1944,27 @@ async def user_anime_details(
             )
         ]
     )
-
+ 
     await query.edit_message_text(
         text,
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML",
     )
-
-
+ 
+ 
 # ============================================================
 # 16. FAVORITES
 # ============================================================
-
+ 
 async def toggle_favorite(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
     query = update.callback_query
-
+ 
     data = query.data
     user_id = query.from_user.id
-
+ 
     try:
         anime_id = int(data.split("_")[-1])
     except (ValueError, IndexError):
@@ -1789,9 +1973,9 @@ async def toggle_favorite(
             show_alert=True,
         )
         return
-
+ 
     session = Session()
-
+ 
     try:
         if data.startswith("fav_add_"):
             existing = (
@@ -1802,7 +1986,7 @@ async def toggle_favorite(
                 )
                 .first()
             )
-
+ 
             if not existing:
                 session.add(
                     Favorite(
@@ -1811,12 +1995,12 @@ async def toggle_favorite(
                     )
                 )
                 session.commit()
-
+ 
             await query.answer(
                 "⭐️ Saralanganlarga qo'shildi!",
                 show_alert=True,
             )
-
+ 
         else:
             (
                 session.query(Favorite)
@@ -1826,50 +2010,50 @@ async def toggle_favorite(
                 )
                 .delete(synchronize_session=False)
             )
-
+ 
             session.commit()
-
+ 
             await query.answer(
                 "❌ Saralanganlardan olib tashlandi!",
                 show_alert=True,
             )
-
+ 
     except Exception as e:
         session.rollback()
-
+ 
         logger.exception(
             "Favorite xatosi: %s",
             e,
         )
-
+ 
         await query.answer(
             "❌ Xatolik yuz berdi.",
             show_alert=True,
         )
-
+ 
     finally:
         Session.remove()
-
+ 
     query.data = f"user_anime_{anime_id}_0"
-
+ 
     await user_anime_details(
         update,
         context,
         ep_page=0,
     )
-
-
+ 
+ 
 async def show_favorites(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
     query = update.callback_query
     await query.answer()
-
+ 
     user_id = query.from_user.id
-
+ 
     session = Session()
-
+ 
     try:
         favs = (
             session.query(Anime.id, Anime.name)
@@ -1883,10 +2067,10 @@ async def show_favorites(
             .order_by(Anime.name.asc())
             .all()
         )
-
+ 
     finally:
         Session.remove()
-
+ 
     if not favs:
         await query.edit_message_text(
             "⭐️ Sizda hali saralangan animelar yo'q.",
@@ -1902,9 +2086,9 @@ async def show_favorites(
             ),
         )
         return
-
+ 
     keyboard = []
-
+ 
     for anime_id, name in favs:
         keyboard.append(
             [
@@ -1914,7 +2098,7 @@ async def show_favorites(
                 )
             ]
         )
-
+ 
     keyboard.append(
         [
             InlineKeyboardButton(
@@ -1923,65 +2107,65 @@ async def show_favorites(
             )
         ]
     )
-
+ 
     await query.edit_message_text(
         "⭐️ <b>SARALANGAN ANIMELARINGIZ</b> 🌟",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML",
     )
-
-
+ 
+ 
 # ============================================================
 # 17. USER PROFILE
 # ============================================================
-
+ 
 async def user_profile(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
     query = update.callback_query
     await query.answer()
-
+ 
     user = query.from_user
     save_user(user)
-
+ 
     session = Session()
-
+ 
     try:
         fav_count = (
             session.query(Favorite)
             .filter_by(user_id=user.id)
             .count()
         )
-
+ 
         db_user = (
             session.query(User)
             .filter_by(telegram_id=user.id)
             .first()
         )
-
+ 
         last_watch_str = (
             "Hali hech qanday anime ko'rilmagan 📺"
         )
-
+ 
         if db_user and db_user.last_anime_id:
             anime = (
                 session.query(Anime)
                 .filter_by(id=db_user.last_anime_id)
                 .first()
             )
-
+ 
             if anime:
                 ep_num = db_user.last_episode_num or 0
-
+ 
                 last_watch_str = (
                     f"🎬 <b>{html.escape(anime.name)}</b> "
                     f"({ep_num}-qism)"
                 )
-
+ 
     finally:
         Session.remove()
-
+ 
     text = (
         "👤 <b>SHAXSIY PROFIL</b> 🆔\n\n"
         f"🆔 <b>Telegram ID:</b> "
@@ -1993,7 +2177,7 @@ async def user_profile(
         f"📺 <b>Oxirgi ko'rilgan:</b> "
         f"{last_watch_str}"
     )
-
+ 
     keyboard = [
         [
             InlineKeyboardButton(
@@ -2008,34 +2192,34 @@ async def user_profile(
             )
         ],
     ]
-
+ 
     await query.edit_message_text(
         text,
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML",
     )
-
-
+ 
+ 
 # ============================================================
 # 18. WATCH EPISODE
 # ============================================================
-
+ 
 async def watch_episode(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
     query = update.callback_query
     await query.answer()
-
+ 
     parts = query.data.split("_")
-
+ 
     if len(parts) != 3:
         if query.message:
             await query.message.reply_text(
                 "❌ Noto'g'ri qism ma'lumoti."
             )
         return
-
+ 
     try:
         anime_id = int(parts[1])
         ep_num = int(parts[2])
@@ -2045,18 +2229,18 @@ async def watch_episode(
                 "❌ Noto'g'ri qism ma'lumoti."
             )
         return
-
+ 
     user_id = query.from_user.id
-
+ 
     session = Session()
-
+ 
     try:
         db_user = (
             session.query(User)
             .filter_by(telegram_id=user_id)
             .first()
         )
-
+ 
         if db_user is None:
             db_user = User(
                 telegram_id=user_id,
@@ -2064,10 +2248,10 @@ async def watch_episode(
                 first_name=query.from_user.first_name,
             )
             session.add(db_user)
-
+ 
         db_user.last_anime_id = anime_id
         db_user.last_episode_num = ep_num
-
+ 
         ep_data = (
             session.query(
                 Anime.name,
@@ -2083,11 +2267,11 @@ async def watch_episode(
             )
             .first()
         )
-
+ 
         if ep_data:
             anime_name = ep_data[0]
             file_id = ep_data[1]
-
+ 
             has_next = (
                 session.query(Episode)
                 .filter_by(
@@ -2097,7 +2281,7 @@ async def watch_episode(
                 .first()
                 is not None
             )
-
+ 
             has_prev = (
                 session.query(Episode)
                 .filter_by(
@@ -2112,34 +2296,34 @@ async def watch_episode(
             file_id = None
             has_next = False
             has_prev = False
-
+ 
         session.commit()
-
+ 
     except Exception as e:
         session.rollback()
         logger.exception(
             "Watch episode xatosi: %s",
             e,
         )
-
+ 
         if query.message:
             await query.message.reply_text(
                 "❌ Qismni ochishda xatolik yuz berdi."
             )
         return
-
+ 
     finally:
         Session.remove()
-
+ 
     if not file_id:
         if query.message:
             await query.message.reply_text(
                 "❌ Ushbu qism topilmadi!"
             )
         return
-
+ 
     nav_buttons = []
-
+ 
     if has_prev:
         nav_buttons.append(
             InlineKeyboardButton(
@@ -2149,7 +2333,7 @@ async def watch_episode(
                 ),
             )
         )
-
+ 
     if has_next:
         nav_buttons.append(
             InlineKeyboardButton(
@@ -2166,12 +2350,12 @@ async def watch_episode(
                 callback_data=f"no_next_{ep_num + 1}",
             )
         )
-
+ 
     keyboard = []
-
+ 
     if nav_buttons:
         keyboard.append(nav_buttons)
-
+ 
     keyboard.append(
         [
             InlineKeyboardButton(
@@ -2180,7 +2364,7 @@ async def watch_episode(
             )
         ]
     )
-
+ 
     keyboard.append(
         [
             InlineKeyboardButton(
@@ -2189,7 +2373,7 @@ async def watch_episode(
             )
         ]
     )
-
+ 
     keyboard.append(
         [
             InlineKeyboardButton(
@@ -2198,7 +2382,7 @@ async def watch_episode(
             )
         ]
     )
-
+ 
     try:
         await context.bot.send_video(
             chat_id=query.message.chat_id,
@@ -2210,30 +2394,30 @@ async def watch_episode(
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="HTML",
         )
-
+ 
     except Exception as e:
         logger.exception(
             "Video yuborishda xatolik: %s",
             e,
         )
-
+ 
         if query.message:
             await query.message.reply_text(
                 "❌ Videoni yuborishda xatolik yuz berdi."
             )
-
-
+ 
+ 
 async def handle_no_next_episode(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
     query = update.callback_query
-
+ 
     try:
         next_ep = query.data.split("_")[2]
     except IndexError:
         next_ep = "Keyingi"
-
+ 
     await query.answer(
         text=(
             f"📌 {next_ep}-qism hali chiqarilmagan. "
@@ -2241,20 +2425,76 @@ async def handle_no_next_episode(
         ),
         show_alert=True,
     )
-
-
+ 
+ 
+# ---- Mini App: 'Ochish' tugmasi bosilganda kelgan so'rov ----
+ 
+async def handle_web_app_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Mini App'dagi 'Ochish' tugmasi bosilganda Telegram shu handler'ga xabar yuboradi."""
+    msg = update.effective_message
+    if not msg or not msg.web_app_data:
+        return
+ 
+    try:
+        payload = json.loads(msg.web_app_data.data)
+        anime_id = int(payload.get("anime_id"))
+        ep_num = int(payload.get("episode_number"))
+    except (ValueError, TypeError, AttributeError):
+        await msg.reply_text("❌ Noto'g'ri so'rov.")
+        return
+ 
+    user_id = update.effective_user.id
+    session = Session()
+ 
+    try:
+        ep_data = (
+            session.query(Anime.name, Episode.file_id)
+            .join(Episode, Episode.anime_id == Anime.id)
+            .filter(
+                Episode.anime_id == anime_id,
+                Episode.episode_number == ep_num,
+            )
+            .first()
+        )
+ 
+        db_user = session.query(User).filter_by(telegram_id=user_id).first()
+        if db_user:
+            db_user.last_anime_id = anime_id
+            db_user.last_episode_num = ep_num
+            session.commit()
+ 
+    finally:
+        Session.remove()
+ 
+    if not ep_data:
+        await msg.reply_text("❌ Ushbu qism topilmadi!")
+        return
+ 
+    anime_name, file_id = ep_data
+ 
+    await context.bot.send_video(
+        chat_id=update.effective_chat.id,
+        video=file_id,
+        caption=(
+            f"🎌 <b>{html.escape(anime_name)}</b>\n"
+            f"📺 <b>{ep_num}-qism</b> 🍿"
+        ),
+        parse_mode="HTML",
+    )
+ 
+ 
 # ============================================================
 # 19. REPORT
 # ============================================================
-
+ 
 async def report_issue(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
     query = update.callback_query
-
+ 
     parts = query.data.split("_")
-
+ 
     try:
         anime_id = int(parts[1])
         ep_num = int(parts[2])
@@ -2264,20 +2504,20 @@ async def report_issue(
             show_alert=True,
         )
         return
-
+ 
     await query.answer(
         "⚠️ Adminga xabar yuborildi!",
         show_alert=True,
     )
-
+ 
     user = query.from_user
-
+ 
     username = (
         f"@{user.username}"
         if user.username
         else "username yo'q"
     )
-
+ 
     report_text = (
         "🚨 <b>XATOLIK XABARI!</b> ⚠️\n\n"
         f"👤 Foydalanuvchi: {html.escape(username)}\n"
@@ -2285,7 +2525,7 @@ async def report_issue(
         f"🎌 Anime ID: <code>{anime_id}</code>\n"
         f"📺 Qism: <b>{ep_num}-qism</b>"
     )
-
+ 
     try:
         await context.bot.send_message(
             chat_id=ADMIN_ID,
@@ -2297,19 +2537,19 @@ async def report_issue(
             "Admin report yuborishda xatolik: %s",
             e,
         )
-
-
+ 
+ 
 # ============================================================
 # 20. CALLBACK ROUTER
 # ============================================================
-
+ 
 async def callback_router(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
     query = update.callback_query
     data = query.data or ""
-
+ 
     if data == "check_subscription":
         if await check_sub(
             query.from_user.id,
@@ -2319,106 +2559,106 @@ async def callback_router(
                 "✅ Obuna tasdiqlandi!",
                 show_alert=True,
             )
-
+ 
             await start(update, context)
-
+ 
         else:
             await query.answer(
                 "❌ Siz hali barcha kanallarga a'zo bo'lmagansiz!",
                 show_alert=True,
             )
-
+ 
         return
-
+ 
     if not await check_sub(
         query.from_user.id,
         context,
     ):
         await send_sub_request(update, context)
         return
-
+ 
     if data == "back_to_main":
         await start(update, context)
         return
-
+ 
     if data == "back_admin":
         if is_admin(query.from_user.id):
             await query.answer()
             await send_admin_panel(update)
         return
-
+ 
     if data == "delete_anime":
         await delete_anime_list(update, context)
         return
-
+ 
     if data.startswith("confirm_delete_"):
         await process_delete_anime(update, context)
         return
-
+ 
     if data == "admin_anime_list":
         await admin_anime_list(update, context)
         return
-
+ 
     if data == "statistics":
         await admin_stats(update, context)
         return
-
+ 
     if data.startswith("user_anime_list_page_"):
         try:
             page = int(data.split("_")[-1])
         except ValueError:
             page = 0
-
+ 
         await user_anime_list_paged(
             update,
             context,
             page,
         )
         return
-
+ 
     if data == "user_profile":
         await user_profile(update, context)
         return
-
+ 
     if data == "user_favorites":
         await show_favorites(update, context)
         return
-
+ 
     if data.startswith("fav_add_") or data.startswith(
         "fav_remove_"
     ):
         await toggle_favorite(update, context)
         return
-
+ 
     if data.startswith("user_anime_"):
         await user_anime_details(update, context)
         return
-
+ 
     if data.startswith("watch_"):
         await watch_episode(update, context)
         return
-
+ 
     if data.startswith("no_next_"):
         await handle_no_next_episode(update, context)
         return
-
+ 
     if data.startswith("report_"):
         await report_issue(update, context)
         return
-
+ 
     await query.answer()
-
-
+ 
+ 
 # ============================================================
 # 21. CANCEL
 # ============================================================
-
+ 
 async def cancel(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
     context.user_data.clear()
-
+ 
     if update.callback_query:
         await update.callback_query.answer()
         await send_admin_panel(update)
@@ -2427,14 +2667,14 @@ async def cancel(
             "❌ Amal bekor qilindi.\n\n"
             "/admin orqali panelni qayta ochishingiz mumkin."
         )
-
+ 
     return ConversationHandler.END
-
-
+ 
+ 
 # ============================================================
 # 22. ERROR HANDLER
 # ============================================================
-
+ 
 async def error_handler(
     update: object,
     context: ContextTypes.DEFAULT_TYPE,
@@ -2443,31 +2683,31 @@ async def error_handler(
         "Telegram update xatosi: %s",
         context.error,
     )
-
-
+ 
+ 
 # ============================================================
 # 23. MAIN
 # ============================================================
-
+ 
 def main():
     init_database()
-
+ 
     web_thread = Thread(
         target=run_web_server,
         daemon=True,
     )
     web_thread.start()
-
+ 
     application = (
         Application.builder()
         .token(TOKEN)
         .build()
     )
-
+ 
     # -------------------------
     # ADD ANIME CONVERSATION
     # -------------------------
-
+ 
     add_anime_conv = ConversationHandler(
         entry_points=[
             CallbackQueryHandler(
@@ -2503,11 +2743,11 @@ def main():
             ),
         ],
     )
-
+ 
     # -------------------------
     # ADD EPISODE CONVERSATION
     # -------------------------
-
+ 
     add_episode_conv = ConversationHandler(
         entry_points=[
             CallbackQueryHandler(
@@ -2548,11 +2788,11 @@ def main():
             ),
         ],
     )
-
+ 
     # -------------------------
     # BROADCAST CONVERSATION
     # -------------------------
-
+ 
     broadcast_conv = ConversationHandler(
         entry_points=[
             CallbackQueryHandler(
@@ -2576,51 +2816,55 @@ def main():
             ),
         ],
     )
-
+ 
     # -------------------------
     # HANDLERS
     # -------------------------
-
+ 
     application.add_handler(
         CommandHandler(
             "start",
             start,
         )
     )
-
+ 
     application.add_handler(
         CommandHandler(
             "admin",
             admin,
         )
     )
-
+ 
     application.add_handler(add_anime_conv)
     application.add_handler(add_episode_conv)
     application.add_handler(broadcast_conv)
-
+ 
+    application.add_handler(
+        MessageHandler(filters.StatusUpdate.WEB_APP_DATA, handle_web_app_data)
+    )
+ 
     application.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
             search_anime,
         )
     )
-
+ 
     application.add_handler(
         CallbackQueryHandler(
             callback_router
         )
     )
-
+ 
     application.add_error_handler(error_handler)
-
+ 
     logger.info("🤖 Bot ishga tushmoqda...")
-
+ 
     application.run_polling(
         allowed_updates=Update.ALL_TYPES,
         drop_pending_updates=False,
     )
-
-
+ 
+ 
 if __name__ == "__main__":
     main()
