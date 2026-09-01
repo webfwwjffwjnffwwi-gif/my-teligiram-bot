@@ -1,373 +1,387 @@
+
 <!DOCTYPE html>
 <html lang="uz">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Uzbekcha Animelar - WebApp</title>
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <style>
-        :root {
-            --bg-dark: #121214;
-            --gold-glow: #ffd700;
-            --red-glow: #ff073a;
-            --green-glow: #00ff66;
-            --text-light: #ffffff;
-        }
-
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        }
-
-        body {
-            background-color: var(--bg-dark);
-            color: var(--text-light);
-            padding: 15px;
-            overflow-x: hidden;
-        }
-
-        /* Navigatsiya menyusi (Teppada qator-ma-qator) */
-        .top-menu {
-            display: flex;
-            justify-content: space-around;
-            background: rgba(255, 255, 255, 0.05);
-            padding: 10px;
-            border-radius: 12px;
-            border: 1px solid rgba(255, 215, 0, 0.3);
-            margin-bottom: 20px;
-            box-shadow: 0 0 10px rgba(255, 215, 0, 0.2);
-        }
-
-        .menu-item {
-            background: transparent;
-            border: none;
-            color: var(--gold-glow);
-            font-size: 13px;
-            font-weight: bold;
-            cursor: pointer;
-            transition: 0.3s;
-            text-shadow: 0 0 5px var(--gold-glow);
-        }
-
-        .menu-item:active {
-            transform: scale(0.9);
-        }
-
-        /* Bo'limlar */
-        .section {
-            display: none;
-            animation: fadeIn 0.4s ease-in-out;
-        }
-
-        .section.active {
-            display: block;
-        }
-
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-
-        h2 {
-            color: var(--gold-glow);
-            text-shadow: 0 0 8px var(--gold-glow);
-            margin-bottom: 15px;
-            font-size: 20px;
-        }
-
-        /* Oylik to'lov kartochkalari */
-        .pricing-container {
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-            margin-bottom: 20px;
-        }
-
-        .price-card {
-            background: rgba(255, 7, 58, 0.08);
-            border: 2px solid var(--red-glow);
-            padding: 15px;
-            border-radius: 12px;
-            text-align: center;
-            box-shadow: 0 0 12px var(--red-glow);
-            transition: 0.3s;
-        }
-
-        .price-card:active {
-            transform: scale(0.97);
-        }
-
-        .price-card h3 {
-            color: var(--red-glow);
-            text-shadow: 0 0 8px var(--red-glow);
-            margin-bottom: 5px;
-        }
-
-        .pay-btn {
-            background: var(--red-glow);
-            color: white;
-            border: none;
-            padding: 8px 15px;
-            border-radius: 8px;
-            font-weight: bold;
-            margin-top: 10px;
-            cursor: pointer;
-            box-shadow: 0 0 8px var(--red-glow);
-        }
-
-        /* Reklama joyi */
-        .ad-space {
-            background: rgba(0, 255, 102, 0.05);
-            border: 2px dashed var(--green-glow);
-            padding: 20px;
-            text-align: center;
-            border-radius: 12px;
-            color: var(--green-glow);
-            text-shadow: 0 0 6px var(--green-glow);
-            margin-bottom: 20px;
-            box-shadow: 0 0 10px rgba(0, 255, 102, 0.2);
-        }
-
-        /* O'yin qismi */
-        .game-box {
-            background: rgba(255, 255, 255, 0.03);
-            border: 1px solid var(--gold-glow);
-            padding: 15px;
-            border-radius: 12px;
-            text-align: center;
-        }
-
-        .game-btn {
-            background: var(--gold-glow);
-            color: #000;
-            border: none;
-            padding: 10px 20px;
-            font-weight: bold;
-            border-radius: 8px;
-            cursor: pointer;
-            margin-top: 10px;
-            box-shadow: 0 0 10px var(--gold-glow);
-        }
-
-        /* Obuna ogohlantirish modali */
-        .modal {
-            display: none;
-            position: fixed;
-            top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.85);
-            justify-content: center;
-            align-items: center;
-            z-index: 1000;
-        }
-
-        .modal-content {
-            background: var(--bg-dark);
-            border: 2px solid var(--red-glow);
-            padding: 20px;
-            border-radius: 15px;
-            text-align: center;
-            width: 85%;
-            box-shadow: 0 0 20px var(--red-glow);
-        }
-
-        .modal-content h3 {
-            color: var(--red-glow);
-            text-shadow: 0 0 8px var(--red-glow);
-            margin-bottom: 10px;
-        }
-
-        /* Admin Panel Tugmasi (Burchakda) */
-        .admin-trigger {
-            position: fixed;
-            bottom: 15px;
-            right: 15px;
-            background: var(--gold-glow);
-            color: #000;
-            border: none;
-            width: 45px; height: 45px;
-            border-radius: 50%;
-            font-weight: bold;
-            font-size: 18px;
-            cursor: pointer;
-            box-shadow: 0 0 15px var(--gold-glow);
-            z-index: 500;
-        }
-
-        /* Admin Panel Modal */
-        #adminPanel {
-            display: none;
-            position: fixed;
-            top: 0; left: 0; width: 100%; height: 100%;
-            background: var(--bg-dark);
-            z-index: 2000;
-            padding: 20px;
-            overflow-y: auto;
-        }
-
-        .admin-input {
-            width: 100%;
-            padding: 10px;
-            margin: 10px 0;
-            background: rgba(255,255,255,0.1);
-            border: 1px solid var(--gold-glow);
-            color: white;
-            border-radius: 8px;
-        }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Anime Bot</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root{
+    --bg: #ffffff;
+    --text: #1c1c1e;
+    --hint: #8e8e93;
+    --link: #2481cc;
+    --button: #2481cc;
+    --button-text: #ffffff;
+    --secondary-bg: #f2f2f7;
+    --accent: #ff6b81;
+    --radius: 14px;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{
+    background:var(--bg); color:var(--text);
+    font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    padding-bottom:24px;
+  }
+ 
+  .tabs{
+    display:flex; gap:6px; background:var(--secondary-bg);
+    padding:4px; border-radius:12px; margin:12px 12px 14px;
+  }
+  .tab{
+    flex:1; text-align:center; padding:9px 2px; border-radius:9px;
+    font-size:12px; font-weight:600; color:var(--hint);
+    cursor:pointer; border:none; background:transparent;
+  }
+  .tab.active{background:var(--bg); color:var(--text); box-shadow:0 1px 3px rgba(0,0,0,0.1);}
+ 
+  .page{display:none; padding:0 12px;}
+  .page.active{display:block;}
+ 
+  .search-box{
+    display:flex; align-items:center; gap:8px;
+    background:var(--secondary-bg); border-radius:12px;
+    padding:10px 14px; margin-bottom:14px;
+  }
+  .search-box input{
+    flex:1; border:none; outline:none; background:transparent;
+    font-size:15px; color:var(--text);
+  }
+  .search-box input::placeholder{color:var(--hint);}
+ 
+  .anime-card{
+    display:flex; align-items:center; gap:12px;
+    background:var(--secondary-bg); border-radius:var(--radius);
+    padding:14px; margin-bottom:10px; cursor:pointer;
+  }
+  .anime-avatar{
+    width:48px; height:48px; border-radius:12px; flex-shrink:0;
+    background:linear-gradient(135deg, var(--accent), var(--link));
+    display:flex; align-items:center; justify-content:center;
+    font-size:20px; font-weight:800; color:#fff;
+  }
+  .anime-info{flex:1; min-width:0;}
+  .anime-name{font-size:15px; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  .anime-meta{font-size:12px; color:var(--hint); margin-top:3px;}
+  .anime-fav-icon{font-size:20px; flex-shrink:0;}
+ 
+  .empty-msg, .loading-msg{
+    text-align:center; padding:40px 20px; color:var(--hint); font-size:14px;
+  }
+ 
+  .detail-header{
+    display:flex; align-items:center; gap:10px; margin:12px 0 16px;
+  }
+  .back-btn{
+    background:var(--secondary-bg); border:none; border-radius:10px;
+    width:36px; height:36px; font-size:18px; cursor:pointer; color:var(--text);
+  }
+  .detail-title{font-size:19px; font-weight:800; flex:1;}
+  .fav-toggle-btn{
+    background:var(--secondary-bg); border:none; border-radius:10px;
+    width:36px; height:36px; font-size:18px; cursor:pointer;
+  }
+ 
+  .detail-badges{display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap;}
+  .badge{
+    font-size:12px; font-weight:700; padding:5px 12px; border-radius:20px;
+    background:var(--secondary-bg); color:var(--hint);
+  }
+  .detail-desc{font-size:14px; line-height:1.5; color:var(--hint); margin-bottom:20px;}
+ 
+  .ep-grid{
+    display:grid; grid-template-columns:repeat(4, 1fr); gap:8px;
+  }
+  .ep-btn{
+    background:var(--secondary-bg); border:none; border-radius:10px;
+    padding:12px 4px; font-size:13px; font-weight:700; color:var(--text);
+    cursor:pointer;
+  }
+  .ep-btn:active{background:var(--button); color:var(--button-text);}
+ 
+  .section-title{font-size:13px; font-weight:700; color:var(--hint); margin-bottom:10px; text-transform:uppercase;}
+ 
+  .placeholder-page{text-align:center; padding:60px 20px;}
+  .placeholder-page .icon{font-size:48px; margin-bottom:12px;}
+  .placeholder-page p{color:var(--hint); font-size:14px;}
+ 
+  /* Stats */
+  .stats-grid{display:grid; grid-template-columns:1fr; gap:10px; margin-top:14px;}
+  .stat-card{
+    background:var(--secondary-bg); border-radius:var(--radius);
+    padding:18px; display:flex; align-items:center; gap:14px;
+  }
+  .stat-icon{font-size:26px;}
+  .stat-value{font-size:22px; font-weight:800;}
+  .stat-label{font-size:12px; color:var(--hint); margin-top:2px;}
+ 
+  .ad-banner{
+    background:linear-gradient(135deg, var(--accent), var(--link));
+    color:#fff; border-radius:var(--radius); padding:14px 16px;
+    font-size:13px; font-weight:600; margin-bottom:14px; line-height:1.4;
+  }
+</style>
 </head>
 <body>
-
-    <div class="top-menu">
-        <button class="menu-item" onclick="switchSection('home')">1. Bosh menyu</button>
-        <button class="menu-item" onclick="switchSection('favorites')">2. Sevimlilar</button>
-        <button class="menu-item" onclick="switchSection('stats')">3. Statistika</button>
-        <button class="menu-item" onclick="switchSection('payment')">4. To'lov</button>
-        <button class="menu-item" onclick="switchSection('game')">5. O'yin</button>
-    </div>
-
-    <div id="home" class="section active">
-        <h2>Xush kelibsiz, Uzbekcha Animelar olamiga!</h2>
-        <p>Eng Sara animelar o'zbek tilida faqat bizda.</p>
-    </div>
-
-    <div id="favorites" class="section">
-        <h2>Sevimli Animelar</h2>
-        <p>Hozircha sevimli animelaringiz qo'shilmagan.</p>
-    </div>
-
-    <div id="stats" class="section">
-        <h2>Statistika</h2>
-        <p>Jami foydalanuvchilar: <b>1,420</b></p>
-        <p>Tarjima qilingan animelar: <b>85 ta</b></p>
-    </div>
-
-    <div id="payment" class="section">
-        <h2>Oylik va Haftalik To'lovlar</h2>
-        <div class="pricing-container">
-            <div class="price-card">
-                <h3>1 Haftalik Obuna</h3>
-                <p><b>10 000 so'm</b></p>
-                <button class="pay-btn" onclick="buySubscription()">Sotib olish</button>
-            </div>
-            <div class="price-card" style="border-color: var(--gold-glow); box-shadow: 0 0 12px var(--gold-glow);">
-                <h3 style="color: var(--gold-glow); text-shadow: 0 0 8px var(--gold-glow);">1 Oylik Obuna</h3>
-                <p><b>20 000 so'm</b></p>
-                <button class="pay-btn" style="background: var(--gold-glow); color: #000; box-shadow: 0 0 8px var(--gold-glow);" onclick="buySubscription()">Sotib olish</button>
-            </div>
+ 
+<div class="tabs">
+  <button class="tab active" data-tab="home">🏠 Bosh sahifa</button>
+  <button class="tab" data-tab="favorites">⭐️ Sevimlilar</button>
+  <button class="tab" data-tab="stats">📊 Statistika</button>
+  <button class="tab" data-tab="game">🎮 Mening o'yinim</button>
+</div>
+ 
+<div class="page active" id="page-home">
+  <div id="ad-banner"></div>
+  <div class="search-box">
+    <span>🔍</span>
+    <input type="text" id="search-input" placeholder="Anime nomi yoki ID...">
+  </div>
+  <div id="catalog-list"></div>
+</div>
+ 
+<div class="page" id="page-favorites">
+  <div id="favorites-list"></div>
+</div>
+ 
+<div class="page" id="page-stats">
+  <div id="stats-content" class="stats-grid">
+    <div class="loading-msg">Yuklanmoqda...</div>
+  </div>
+</div>
+ 
+<div class="page" id="page-game">
+  <div class="placeholder-page">
+    <div class="icon">🎮</div>
+    <p>Anime viktorinasi tez orada shu yerda bo'ladi!</p>
+  </div>
+</div>
+ 
+<div class="page" id="page-detail">
+  <div class="detail-header">
+    <button class="back-btn" onclick="showHome()">←</button>
+    <div class="detail-title" id="detail-title">—</div>
+    <button class="fav-toggle-btn" id="detail-fav-btn">🤍</button>
+  </div>
+  <div class="detail-badges" id="detail-badges"></div>
+  <div class="detail-desc" id="detail-desc"></div>
+  <div class="section-title">Qismlar</div>
+  <div class="ep-grid" id="detail-episodes"></div>
+</div>
+ 
+<script>
+const tg = window.Telegram?.WebApp;
+if (tg) {
+  tg.ready();
+  tg.expand();
+  const tp = tg.themeParams || {};
+  const root = document.documentElement.style;
+  if (tp.bg_color) root.setProperty('--bg', tp.bg_color);
+  if (tp.text_color) root.setProperty('--text', tp.text_color);
+  if (tp.hint_color) root.setProperty('--hint', tp.hint_color);
+  if (tp.link_color) root.setProperty('--link', tp.link_color);
+  if (tp.button_color) root.setProperty('--button', tp.button_color);
+  if (tp.button_text_color) root.setProperty('--button-text', tp.button_text_color);
+  if (tp.secondary_bg_color) root.setProperty('--secondary-bg', tp.secondary_bg_color);
+}
+ 
+const initData = tg?.initData || "";
+let currentAnimeId = null;
+ 
+async function apiGet(url) {
+  const res = await fetch(url, { headers: { 'X-Telegram-Init-Data': initData } });
+  if (!res.ok) throw new Error('request_failed');
+  return res.json();
+}
+ 
+async function apiPost(url, body) {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'X-Telegram-Init-Data': initData, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error('request_failed');
+  return res.json();
+}
+ 
+function animeInitial(name) {
+  return (name || '?').trim().charAt(0).toUpperCase();
+}
+ 
+function renderAnimeCard(a) {
+  const heart = a.is_favorite ? '❤️' : '';
+  return `
+    <div class="anime-card" onclick="openAnime(${a.id})">
+      <div class="anime-avatar">${animeInitial(a.name)}</div>
+      <div class="anime-info">
+        <div class="anime-name">${a.name}</div>
+        <div class="anime-meta">${a.genre || "Janr ko'rsatilmagan"} · ${a.episode_count} qism</div>
+      </div>
+      <div class="anime-fav-icon">${heart}</div>
+    </div>`;
+}
+ 
+let searchTimer = null;
+async function loadCatalog(search = '') {
+  const el = document.getElementById('catalog-list');
+  el.innerHTML = '<div class="loading-msg">Yuklanmoqda...</div>';
+  try {
+    const data = await apiGet(`/api/anime?search=${encodeURIComponent(search)}`);
+    if (!data.items.length) {
+      el.innerHTML = '<div class="empty-msg">Hech narsa topilmadi 😔</div>';
+      return;
+    }
+    el.innerHTML = data.items.map(renderAnimeCard).join('');
+  } catch (e) {
+    el.innerHTML = "<div class=\"empty-msg\">❌ Yuklashda xatolik. Qayta urinib ko'ring.</div>";
+  }
+}
+ 
+document.getElementById('search-input').addEventListener('input', (e) => {
+  clearTimeout(searchTimer);
+  const val = e.target.value;
+  searchTimer = setTimeout(() => loadCatalog(val), 300);
+});
+ 
+async function loadFavorites() {
+  const el = document.getElementById('favorites-list');
+  el.innerHTML = '<div class="loading-msg">Yuklanmoqda...</div>';
+  try {
+    const data = await apiGet('/api/favorites');
+    if (!data.items.length) {
+      el.innerHTML = "<div class=\"empty-msg\">Hali sevimli animelaringiz yo'q ⭐️</div>";
+      return;
+    }
+    el.innerHTML = data.items.map(a => `
+      <div class="anime-card" onclick="openAnime(${a.id})">
+        <div class="anime-avatar">${animeInitial(a.name)}</div>
+        <div class="anime-info">
+          <div class="anime-name">${a.name}</div>
+          <div class="anime-meta">${a.genre || "Janr ko'rsatilmagan"}</div>
         </div>
-    </div>
-
-    <div id="game" class="section">
-        <h2>Zerikmaslik uchun O'yin</h2>
-        <div class="game-box">
-            <p id="gameText">Tugmani bosing va omadfingizni sinang!</p>
-            <button class="game-btn" onclick="playGame()">Omadli raqamni topish</button>
+        <div class="anime-fav-icon">❤️</div>
+      </div>`).join('');
+  } catch (e) {
+    el.innerHTML = '<div class="empty-msg">❌ Yuklashda xatolik.</div>';
+  }
+}
+ 
+async function loadStats() {
+  const el = document.getElementById('stats-content');
+  el.innerHTML = '<div class="loading-msg">Yuklanmoqda...</div>';
+  try {
+    const data = await apiGet('/api/stats');
+    el.innerHTML = `
+      <div class="stat-card">
+        <div class="stat-icon">👥</div>
+        <div>
+          <div class="stat-value">${data.users_count}</div>
+          <div class="stat-label">Foydalanuvchilar</div>
         </div>
-    </div>
-
-    <div class="ad-space" id="adContainer">
-        📢 Reklama joyi (Admin panel orqali o'zgartiriladi)
-    </div>
-
-    <button class="admin-trigger" onclick="openAdminLogin()">⚙️</button>
-
-    <div class="modal" id="subModal">
-        <div class="modal-content">
-            <h3>DIQQAT! OGOHLANTIRISH</h3>
-            <p style="margin: 15px 0;">Sizda faol obuna mavjud emas! Barcha animelardan cheklovlarsiz foydalanish uchun obuna sotib oling.</p>
-            <button class="pay-btn" onclick="closeModal()">Tushunarli</button>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon">🎌</div>
+        <div>
+          <div class="stat-value">${data.anime_count}</div>
+          <div class="stat-label">Animelar</div>
         </div>
-    </div>
-
-    <div id="adminPanel">
-        <h2>🔒 Admin Panel</h2>
-        <div id="loginBox">
-            <p>10 talik parolni kiriting:</p>
-            <input type="password" id="adminPassInput" class="admin-input" placeholder="Parol...">
-            <button class="pay-btn" onclick="checkAdminPassword()">Kirish</button>
-            <button class="pay-btn" style="background: gray; margin-left: 10px;" onclick="closeAdminPanel()">Chiqish</button>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon">🍿</div>
+        <div>
+          <div class="stat-value">${data.episodes_count}</div>
+          <div class="stat-label">Qismlar</div>
         </div>
-        <div id="adminDashboard" style="display: none;">
-            <p style="color: var(--green-glow); margin-bottom: 15px;">✅ Xush kelibsiz, Admin!</p>
-            <label>Reklama matnini o'zgartirish:</label>
-            <input type="text" id="adTextInput" class="admin-input" placeholder="Yangi reklama matni...">
-            <button class="pay-btn" onclick="updateAd()">Reklamani yangilash</button>
-            <hr style="margin: 20px 0; border-color: rgba(255,215,0,0.3);">
-            <button class="pay-btn" style="background: var(--red-glow);" onclick="closeAdminPanel()">Admin Dan Chiqish</button>
-        </div>
-    </div>
-
-    <script>
-        const tg = window.Telegram.WebApp;
-        tg.expand();
-
-        // Bo'limlarni almashtirish va effekt
-        function switchSection(sectionId) {
-            document.querySelectorAll('.section').forEach(sec => sec.classList.remove('active'));
-            document.getElementById(sectionId).classList.add('active');
-            if (navigator.vibrate) navigator.vibrate(30); // Bosilganda yengil vibratsiya effekti
-        }
-
-        // O'yin funksiyasi
-        function playGame() {
-            const randomNum = Math.floor(Math.random() * 10) + 1;
-            document.getElementById('gameText').innerText = `Sizning omadli raqamingiz: ${randomNum} 🎯`;
-            if (navigator.vibrate) navigator.vibrate(50);
-        }
-
-        // Obuna sotib olish simulatsiyasi
-        function buySubscription() {
-            alert("To'lov tizimiga yo'naltirilmoqda...");
-            localStorage.setItem('hasSubscription', 'true');
-            document.getElementById('subModal').style.display = 'none';
-        }
-
-        // Har 12 daqiqada obuna so'rash (agar sotib olmagan bo'lsa)
-        let hasSub = localStorage.getItem('hasSubscription');
-        if (!hasSub) {
-            setInterval(() => {
-                document.getElementById('subModal').style.display = 'flex';
-                if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
-            }, 12 * 60 * 1000); // 12 daqiqa
-        }
-
-        function closeModal() {
-            document.getElementById('subModal').style.display = 'none';
-        }
-
-        // Admin Panel Logic
-        const ADMIN_SECRET = "Bekjon0880"; // 10 talik parol
-
-        function openAdminLogin() {
-            document.getElementById('adminPanel').style.display = 'block';
-            document.getElementById('loginBox').style.display = 'block';
-            document.getElementById('adminDashboard').style.display = 'none';
-            document.getElementById('adminPassInput').value = '';
-        }
-
-        function checkAdminPassword() {
-            const inputVal = document.getElementById('adminPassInput').value;
-            if (inputVal === ADMIN_SECRET) {
-                document.getElementById('loginBox').style.display = 'none';
-                document.getElementById('adminDashboard').style.display = 'block';
-            } else {
-                alert("❌ Parol noto'g'ri! Qabul qilinmadi.");
-            }
-        }
-
-        function closeAdminPanel() {
-            document.getElementById('adminPanel').style.display = 'none';
-        }
-
-        function updateAd() {
-            const newText = document.getElementById('adTextInput').value;
-            if (newText.trim() !== "") {
-                document.getElementById('adContainer').innerText = newText;
-                alert("✅ Reklama muvaffaqiyatli o'zgartirildi!");
-            }
-        }
-    </script>
+      </div>`;
+  } catch (e) {
+    el.innerHTML = '<div class="empty-msg">❌ Yuklashda xatolik.</div>';
+  }
+}
+ 
+async function openAnime(animeId) {
+  currentAnimeId = animeId;
+  showPage('page-detail');
+  document.getElementById('detail-title').textContent = 'Yuklanmoqda...';
+  document.getElementById('detail-badges').innerHTML = '';
+  document.getElementById('detail-desc').textContent = '';
+  document.getElementById('detail-episodes').innerHTML = '';
+ 
+  try {
+    const a = await apiGet(`/api/anime/${animeId}`);
+    document.getElementById('detail-title').textContent = a.name;
+    document.getElementById('detail-badges').innerHTML = `
+      <span class="badge">${a.genre || "Janr yo'q"}</span>
+      <span class="badge">${a.episodes.length} qism</span>`;
+    document.getElementById('detail-desc').textContent = a.description || 'Tavsif berilmagan.';
+    document.getElementById('detail-fav-btn').textContent = a.is_favorite ? '❤️' : '🤍';
+ 
+    document.getElementById('detail-episodes').innerHTML = a.episodes.map(ep => `
+      <button class="ep-btn" onclick="watchEpisode(${animeId}, ${ep})">${ep}-qism</button>
+    `).join('') || "<div class=\"empty-msg\">Hali qismlar yo'q</div>";
+  } catch (e) {
+    document.getElementById('detail-title').textContent = 'Xatolik yuz berdi';
+  }
+}
+ 
+document.getElementById('detail-fav-btn').addEventListener('click', async () => {
+  if (!currentAnimeId) return;
+  const btn = document.getElementById('detail-fav-btn');
+  try {
+    const res = await apiPost('/api/favorite/toggle', { anime_id: currentAnimeId });
+    btn.textContent = res.is_favorite ? '❤️' : '🤍';
+    tg?.HapticFeedback?.impactOccurred('light');
+  } catch (e) { /* jim saqlanadi */ }
+});
+ 
+function watchEpisode(animeId, epNum) {
+  if (tg?.sendData) {
+    tg.sendData(JSON.stringify({ anime_id: animeId, episode_number: epNum }));
+    tg.close();
+  } else {
+    alert('Bu funksiya faqat Telegram ichida ishlaydi.');
+  }
+}
+ 
+function showPage(id) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+}
+ 
+function showHome() {
+  showPage('page-home');
+}
+ 
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    const name = tab.dataset.tab;
+    showPage('page-' + name);
+    if (name === 'home') loadCatalog(document.getElementById('search-input').value);
+    if (name === 'favorites') loadFavorites();
+    if (name === 'stats') loadStats();
+  });
+});
+ 
+async function loadAds() {
+  const el = document.getElementById('ad-banner');
+  try {
+    const data = await apiGet('/api/ads');
+    if (!data.items.length) { el.innerHTML = ''; return; }
+    el.innerHTML = data.items.map(a => {
+      const inner = `📢 ${a.text}`;
+      return a.link_url
+        ? `<a class="ad-banner" style="display:block; text-decoration:none;" href="${a.link_url}" target="_blank">${inner}</a>`
+        : `<div class="ad-banner">${inner}</div>`;
+    }).join('');
+  } catch (e) { /* jim saqlanadi, reklama ko'rinmasa ham sahifa ishlashda davom etadi */ }
+}
+ 
+loadCatalog();
+loadAds();
+</script>
+ 
 </body>
 </html>
+ 

@@ -10,7 +10,8 @@ from threading import Thread
 from urllib.parse import parse_qsl
  
 from dotenv import load_dotenv
-from flask import Flask, send_from_directory, request, jsonify
+from flask import Flask, send_from_directory, request, jsonify, session
+from functools import wraps
  
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -74,6 +75,13 @@ REQUIRED_CHANNELS = [
     if channel.strip()
 ]
  
+# Veb-admin panel uchun parol va sessiya kaliti.
+# XAVFSIZLIK: bularni Render'ning "Environment Variables" bo'limida
+# ADMIN_PANEL_PASSWORD va FLASK_SECRET_KEY nomlari bilan qayta belgilang —
+# shunda haqiqiy qiymat GitHub'dagi kodda ko'rinmaydi.
+ADMIN_PANEL_PASSWORD = os.getenv("ADMIN_PANEL_PASSWORD", "Bekjon0880")
+FLASK_SECRET_KEY = os.getenv("FLASK_SECRET_KEY", "iltimos-buni-render-envga-kochiring")
+ 
 PAGE_SIZE = 5
 EPISODES_PER_PAGE = 5
  
@@ -95,6 +103,7 @@ logger = logging.getLogger(__name__)
 # ============================================================
  
 web_app = Flask(__name__)
+web_app.secret_key = FLASK_SECRET_KEY
  
  
 @web_app.route("/")
@@ -309,6 +318,277 @@ def api_stats():
  
  
 WEBAPP_DIR = Path(__file__).resolve().parent / "webapp"
+ADMIN_DIR = Path(__file__).resolve().parent / "admin_panel"
+ 
+ 
+# ---- Admin panel: login himoyasi ----
+ 
+def login_required(f):
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        if not session.get("admin_logged_in"):
+            return jsonify({"error": "unauthorized"}), 401
+        return f(*args, **kwargs)
+    return wrapper
+ 
+ 
+@web_app.route("/admin/api/login", methods=["POST"])
+def admin_login():
+    data = request.get_json(silent=True) or {}
+    password = data.get("password", "")
+    if hmac.compare_digest(password, ADMIN_PANEL_PASSWORD):
+        session["admin_logged_in"] = True
+        session.permanent = True
+        return jsonify({"ok": True})
+    return jsonify({"error": "wrong_password"}), 401
+ 
+ 
+@web_app.route("/admin/api/logout", methods=["POST"])
+def admin_logout():
+    session.pop("admin_logged_in", None)
+    return jsonify({"ok": True})
+ 
+ 
+@web_app.route("/admin/api/me")
+def admin_me():
+    return jsonify({"logged_in": bool(session.get("admin_logged_in"))})
+ 
+ 
+# ---- Admin panel: statistika ----
+ 
+@web_app.route("/admin/api/stats")
+@login_required
+def admin_api_stats():
+    session_db = Session()
+    try:
+        users_count = session_db.query(User).count()
+        anime_count = session_db.query(Anime).count()
+        episodes_count = session_db.query(Episode).count()
+    finally:
+        Session.remove()
+ 
+    return jsonify({
+        "users_count": users_count,
+        "anime_count": anime_count,
+        "episodes_count": episodes_count,
+    })
+ 
+ 
+# ---- Admin panel: anime CRUD ----
+ 
+@web_app.route("/admin/api/anime", methods=["GET"])
+@login_required
+def admin_api_anime_list():
+    session_db = Session()
+    try:
+        anime_list = session_db.query(Anime).order_by(Anime.id.desc()).all()
+        result = []
+        for a in anime_list:
+            ep_count = session_db.query(Episode).filter_by(anime_id=a.id).count()
+            result.append({
+                "id": a.id, "name": a.name, "genre": a.genre or "",
+                "description": a.description or "", "episode_count": ep_count,
+            })
+    finally:
+        Session.remove()
+    return jsonify({"items": result})
+ 
+ 
+@web_app.route("/admin/api/anime", methods=["POST"])
+@login_required
+def admin_api_anime_create():
+    data = request.get_json(silent=True) or {}
+    name = (data.get("name") or "").strip()
+    genre = (data.get("genre") or "").strip()
+    description = (data.get("description") or "").strip()
+ 
+    if not name:
+        return jsonify({"error": "name_required"}), 400
+ 
+    session_db = Session()
+    try:
+        anime = Anime(name=name, genre=genre or None, description=description or None)
+        session_db.add(anime)
+        session_db.commit()
+        new_id = anime.id
+    except Exception:
+        session_db.rollback()
+        logger.exception("Admin panel: anime yaratishda xatolik")
+        return jsonify({"error": "server_error"}), 500
+    finally:
+        Session.remove()
+ 
+    return jsonify({"id": new_id})
+ 
+ 
+@web_app.route("/admin/api/anime/<int:anime_id>", methods=["DELETE"])
+@login_required
+def admin_api_anime_delete(anime_id):
+    session_db = Session()
+    try:
+        anime = session_db.query(Anime).filter_by(id=anime_id).first()
+        if not anime:
+            return jsonify({"error": "not_found"}), 404
+        session_db.query(Episode).filter_by(anime_id=anime_id).delete(synchronize_session=False)
+        session_db.query(Favorite).filter_by(anime_id=anime_id).delete(synchronize_session=False)
+        session_db.delete(anime)
+        session_db.commit()
+    except Exception:
+        session_db.rollback()
+        logger.exception("Admin panel: anime o'chirishda xatolik")
+        return jsonify({"error": "server_error"}), 500
+    finally:
+        Session.remove()
+ 
+    return jsonify({"ok": True})
+ 
+ 
+@web_app.route("/admin/api/anime/<int:anime_id>/episodes")
+@login_required
+def admin_api_episode_list(anime_id):
+    session_db = Session()
+    try:
+        episodes = (
+            session_db.query(Episode)
+            .filter_by(anime_id=anime_id)
+            .order_by(Episode.episode_number.asc())
+            .all()
+        )
+        result = [{"id": e.id, "episode_number": e.episode_number} for e in episodes]
+    finally:
+        Session.remove()
+    return jsonify({"items": result})
+ 
+ 
+@web_app.route("/admin/api/episode/<int:episode_id>", methods=["DELETE"])
+@login_required
+def admin_api_episode_delete(episode_id):
+    session_db = Session()
+    try:
+        ep = session_db.query(Episode).filter_by(id=episode_id).first()
+        if not ep:
+            return jsonify({"error": "not_found"}), 404
+        session_db.delete(ep)
+        session_db.commit()
+    except Exception:
+        session_db.rollback()
+        logger.exception("Admin panel: epizod o'chirishda xatolik")
+        return jsonify({"error": "server_error"}), 500
+    finally:
+        Session.remove()
+ 
+    return jsonify({"ok": True})
+ 
+ 
+# ---- Admin panel: reklama (Ads) CRUD ----
+ 
+@web_app.route("/admin/api/ads", methods=["GET"])
+@login_required
+def admin_api_ads_list():
+    session_db = Session()
+    try:
+        ads = session_db.query(Ad).order_by(Ad.id.desc()).all()
+        result = [
+            {"id": a.id, "text": a.text, "link_url": a.link_url or "", "is_active": bool(a.is_active)}
+            for a in ads
+        ]
+    finally:
+        Session.remove()
+    return jsonify({"items": result})
+ 
+ 
+@web_app.route("/admin/api/ads", methods=["POST"])
+@login_required
+def admin_api_ads_create():
+    data = request.get_json(silent=True) or {}
+    text = (data.get("text") or "").strip()
+    link_url = (data.get("link_url") or "").strip()
+ 
+    if not text:
+        return jsonify({"error": "text_required"}), 400
+ 
+    session_db = Session()
+    try:
+        ad = Ad(text=text, link_url=link_url or None, is_active=1)
+        session_db.add(ad)
+        session_db.commit()
+        new_id = ad.id
+    except Exception:
+        session_db.rollback()
+        logger.exception("Admin panel: reklama yaratishda xatolik")
+        return jsonify({"error": "server_error"}), 500
+    finally:
+        Session.remove()
+ 
+    return jsonify({"id": new_id})
+ 
+ 
+@web_app.route("/admin/api/ads/<int:ad_id>/toggle", methods=["POST"])
+@login_required
+def admin_api_ads_toggle(ad_id):
+    session_db = Session()
+    try:
+        ad = session_db.query(Ad).filter_by(id=ad_id).first()
+        if not ad:
+            return jsonify({"error": "not_found"}), 404
+        ad.is_active = 0 if ad.is_active else 1
+        session_db.commit()
+        new_state = bool(ad.is_active)
+    except Exception:
+        session_db.rollback()
+        logger.exception("Admin panel: reklama holatini almashtirishda xatolik")
+        return jsonify({"error": "server_error"}), 500
+    finally:
+        Session.remove()
+ 
+    return jsonify({"is_active": new_state})
+ 
+ 
+@web_app.route("/admin/api/ads/<int:ad_id>", methods=["DELETE"])
+@login_required
+def admin_api_ads_delete(ad_id):
+    session_db = Session()
+    try:
+        ad = session_db.query(Ad).filter_by(id=ad_id).first()
+        if not ad:
+            return jsonify({"error": "not_found"}), 404
+        session_db.delete(ad)
+        session_db.commit()
+    except Exception:
+        session_db.rollback()
+        logger.exception("Admin panel: reklama o'chirishda xatolik")
+        return jsonify({"error": "server_error"}), 500
+    finally:
+        Session.remove()
+ 
+    return jsonify({"ok": True})
+ 
+ 
+# ---- Mini App uchun ochiq (public) reklama ro'yxati ----
+ 
+@web_app.route("/api/ads")
+def api_ads_public():
+    session_db = Session()
+    try:
+        ads = session_db.query(Ad).filter_by(is_active=1).order_by(Ad.id.desc()).all()
+        result = [{"text": a.text, "link_url": a.link_url or ""} for a in ads]
+    finally:
+        Session.remove()
+    return jsonify({"items": result})
+ 
+ 
+# ---- Admin panel: sahifa fayllari ----
+ 
+@web_app.route("/admin/")
+def admin_page():
+    return send_from_directory(ADMIN_DIR, "index.html")
+ 
+ 
+@web_app.route("/admin/<path:filename>")
+def admin_static(filename):
+    if filename.startswith("api/"):
+        return jsonify({"error": "not_found"}), 404
+    return send_from_directory(ADMIN_DIR, filename)
  
  
 @web_app.route("/webapp/")
@@ -408,6 +688,15 @@ class Favorite(Base):
             name="uq_user_anime_favorite",
         ),
     )
+ 
+ 
+class Ad(Base):
+    __tablename__ = "ads"
+ 
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    text = Column(String, nullable=False)
+    link_url = Column(String, nullable=True)
+    is_active = Column(Integer, default=1)
  
  
 def init_database():
